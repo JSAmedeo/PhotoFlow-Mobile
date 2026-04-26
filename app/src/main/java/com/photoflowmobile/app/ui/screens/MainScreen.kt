@@ -121,7 +121,8 @@ fun MainScreen(
                 imageCapture = viewModel.imageCapture,
                 latestImage = reviewImage,
                 tetheredStatus = tetheredStatus,
-                onRemoteTrigger = { viewModel.triggerTetheredCapture() }
+                onRemoteTrigger = { viewModel.triggerTetheredCapture() },
+                onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
             )
             RightPanel(
                 modifier = Modifier.width(132.dp).fillMaxHeight(),
@@ -132,7 +133,6 @@ fun MainScreen(
         }
         BottomBar(
             deviceMode = deviceMode,
-            onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } },
             connectionProfiles = connectionProfiles,
             activeConnection = activeConnection,
             onConnectionSelected = { viewModel.setActiveConnection(it) }
@@ -354,7 +354,8 @@ private fun CenterPanel(
     imageCapture: ImageCapture? = null,
     latestImage: SessionImage? = null,
     tetheredStatus: TetheredStatus = TetheredStatus(),
-    onRemoteTrigger: () -> Unit = {}
+    onRemoteTrigger: () -> Unit = {},
+    onCapture: () -> Unit = {}
 ) {
     Box(
         modifier = modifier
@@ -418,80 +419,71 @@ private fun CenterPanel(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(DarkBorder)
+                        .background(DarkPrimary.copy(alpha = 0.3f))
                 )
 
-                // ── Last shot + metadata (right ~42%) ────────────
+                // ── Review pane + capture button (right ~42%) ────────
                 Column(
                     modifier = Modifier
                         .weight(0.42f)
                         .fillMaxHeight()
-                        .padding(6.dp)
                 ) {
-                    Text(
-                        if (latestImage != null)
-                            "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
-                        else
-                            "REVIEW  ·  NO IMAGES",
-                        color = DarkPrimary.copy(alpha = 0.6f),
-                        fontSize = 7.sp,
-                        letterSpacing = 0.4.sp,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    Box(
+                    Column(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .border(1.dp, DarkPrimary.copy(alpha = 0.35f))
-                            .background(Color(0xFF060E0E))
-                    ) {
-                        if (latestImage != null) {
-                            AsyncImage(
-                                model = latestImage.localPath,
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(5.dp))
-                    // EXIF strip
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        listOf("ISO 100", "1/250", "F/2.8", "5200K", "85MM", "RAW").forEach { label ->
-                            Text(
-                                label,
-                                color = DarkOnBackground.copy(alpha = 0.5f),
-                                fontSize = 6.sp,
-                                letterSpacing = 0.2.sp,
-                                modifier = Modifier
-                                    .border(0.5.dp, DarkBorder)
-                                    .padding(horizontal = 3.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(6.dp)
                     ) {
                         Text(
-                            "≒ TRANSFER OK",
-                            color = Color(0xFF4CAF50).copy(alpha = 0.85f),
+                            if (latestImage != null)
+                                "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
+                            else
+                                "REVIEW  ·  NO IMAGES",
+                            color = DarkPrimary.copy(alpha = 0.6f),
                             fontSize = 7.sp,
-                            letterSpacing = 0.3.sp,
+                            letterSpacing = 0.4.sp,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                        Box(
                             modifier = Modifier
-                                .border(0.5.dp, Color(0xFF4CAF50).copy(alpha = 0.35f))
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                        )
-                        Text(
-                            "↓ 42.4MB",
-                            color = DarkOnBackground.copy(alpha = 0.4f),
-                            fontSize = 7.sp
-                        )
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .border(1.dp, DarkPrimary.copy(alpha = 0.35f))
+                                .background(Color(0xFF060E0E))
+                        ) {
+                            if (latestImage != null) {
+                                AsyncImage(
+                                    model = latestImage.localPath,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = DarkPrimary.copy(alpha = 0.3f), thickness = 1.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, DarkPrimary)
+                                .background(DarkPrimary.copy(alpha = 0.10f))
+                                .clickable { onCapture() }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "◉  CAPTURE",
+                                color = DarkPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            )
+                        }
                     }
                 }
             }
@@ -801,7 +793,6 @@ private fun SessionRow(
 @Composable
 private fun BottomBar(
     deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
-    onCapture: () -> Unit = {},
     connectionProfiles: List<ConnectionProfile> = emptyList(),
     activeConnection: ConnectionProfile? = null,
     onConnectionSelected: (ConnectionProfile) -> Unit = {}
@@ -820,34 +811,9 @@ private fun BottomBar(
             onSelected = onConnectionSelected
         )
         Spacer(Modifier.weight(1f))
-        if (deviceMode == DeviceMode.NATIVE_CAMERA) {
-            CaptureButton(onClick = onCapture)
-            Spacer(Modifier.weight(1f))
-        }
         Chip(
             label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered Mode" else "Native Mode",
             active = true
-        )
-    }
-}
-
-@Composable
-private fun CaptureButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .widthIn(min = 220.dp)
-            .border(1.5.dp, DarkPrimary)
-            .background(DarkPrimary.copy(alpha = 0.12f))
-            .clickable { onClick() }
-            .padding(horizontal = 40.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            "◉  CAPTURE",
-            color = DarkPrimary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp
         )
     }
 }

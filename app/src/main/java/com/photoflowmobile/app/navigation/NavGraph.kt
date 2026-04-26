@@ -49,7 +49,7 @@ fun PhotoFlowNavGraph(
             )
         }
         composable(Screen.Config.route) {
-            ConfigScreen()
+            ConfigScreen(onNavigateBack = { navController.popBackStack() })
         }
     }
 }

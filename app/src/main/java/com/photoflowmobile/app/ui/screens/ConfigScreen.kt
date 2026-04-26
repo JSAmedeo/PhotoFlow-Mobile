@@ -47,9 +47,11 @@ private enum class ConnTestState { IDLE, TESTING, SUCCESS, FAILED }
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 @Composable
-fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
-    val savedSettings by viewModel.settings.collectAsStateWithLifecycle()
-    var draft by remember(savedSettings) { mutableStateOf(savedSettings) }
+fun ConfigScreen(
+    onNavigateBack: () -> Unit = {},
+    viewModel: ConfigViewModel = viewModel()
+) {
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     var selectedSection by remember { mutableStateOf(ConfigSection.DEVICE_MODE) }
     val connectionProfiles by viewModel.connectionProfiles.collectAsStateWithLifecycle()
 
@@ -62,13 +64,13 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
         ConfigSidebar(
             selected = selectedSection,
             onSelect = { selectedSection = it },
-            onSave = { viewModel.save(draft) }
+            onNavigateBack = onNavigateBack
         )
         Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(DarkBorder))
         ConfigContent(
             section = selectedSection,
-            settings = draft,
-            onSettingsChange = { draft = it },
+            settings = settings,
+            onSettingsChange = { viewModel.save(it) },
             connectionProfiles = connectionProfiles,
             onUpsertProfile = viewModel::upsertProfile,
             onDeleteProfile = viewModel::deleteProfile,
@@ -85,11 +87,8 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
 private fun ConfigSidebar(
     selected: ConfigSection,
     onSelect: (ConfigSection) -> Unit,
-    onSave: () -> Unit
+    onNavigateBack: () -> Unit
 ) {
-    var saved by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
     Column(
         modifier = Modifier
             .width(120.dp)
@@ -126,20 +125,12 @@ private fun ConfigSidebar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = !saved) {
-                    onSave()
-                    scope.launch {
-                        saved = true
-                        delay(1800)
-                        saved = false
-                    }
-                }
-                .background(if (saved) DarkSuccess.copy(alpha = 0.08f) else Color.Transparent)
+                .clickable { onNavigateBack() }
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(
-                if (saved) "✓ SAVED" else "SAVE CONFIGURATION",
-                color = if (saved) DarkSuccess else DarkPrimary,
+                "← MAIN SCREEN",
+                color = DarkPrimary,
                 fontSize = 8.sp,
                 letterSpacing = 0.5.sp,
                 fontWeight = FontWeight.Bold
