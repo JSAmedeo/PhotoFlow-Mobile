@@ -17,6 +17,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +42,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.window.Dialog
@@ -98,7 +100,6 @@ fun MainScreen(
     ) {
         TopBar(
             onMenuClick = onMenuClick,
-            activeSession = selectedSession ?: activeSession,
             transferQueue = transferQueue,
             onRetry = { viewModel.forceRetry(it) }
         )
@@ -109,7 +110,7 @@ fun MainScreen(
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             LeftPanel(
-                modifier = Modifier.width(72.dp).fillMaxHeight(),
+                modifier = Modifier.width(115.dp).fillMaxHeight(),
                 onNewSession = onNewSession,
                 sessionImages = sessionImages,
                 selectedImageId = reviewImage?.id,
@@ -125,7 +126,7 @@ fun MainScreen(
                 onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
             )
             RightPanel(
-                modifier = Modifier.width(132.dp).fillMaxHeight(),
+                modifier = Modifier.width(99.dp).fillMaxHeight(),
                 sessions = recentSessions,
                 selectedSessionId = selectedSessionId,
                 onSessionSelected = { viewModel.selectSession(it) }
@@ -133,6 +134,7 @@ fun MainScreen(
         }
         BottomBar(
             deviceMode = deviceMode,
+            activeSession = selectedSession ?: activeSession,
             connectionProfiles = connectionProfiles,
             activeConnection = activeConnection,
             onConnectionSelected = { viewModel.setActiveConnection(it) }
@@ -145,7 +147,6 @@ fun MainScreen(
 @Composable
 private fun TopBar(
     onMenuClick: () -> Unit = {},
-    activeSession: Session? = null,
     transferQueue: List<SessionImage> = emptyList(),
     onRetry: (Long) -> Unit = {}
 ) {
@@ -156,27 +157,30 @@ private fun TopBar(
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("⊞", color = DarkPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "PHOTOFLOW — MOBILE",
-            color = DarkPrimary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp
+        Image(
+            painter = androidx.compose.ui.res.painterResource(id = com.photoflowmobile.app.R.drawable.ic_app_logo),
+            contentDescription = "PhotoFlow",
+            modifier = Modifier.height(24.dp).widthIn(max = 32.dp),
+            contentScale = ContentScale.Fit
         )
-        Box(
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.Center
-        ) {
+        Spacer(Modifier.width(8.dp))
+        Row {
             Text(
-                activeSession?.barcode ?: "—",
-                color = DarkPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 2.sp
+                "PHOTOFLOW",
+                color = TextPrimary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp
+            )
+            Text(
+                " MOBILE",
+                color = Blue,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp
             )
         }
+        Spacer(Modifier.weight(1f))
         WifiSsidChip()
         Spacer(Modifier.width(5.dp))
         FileTransfersButton(transferQueue = transferQueue, onRetry = onRetry)
@@ -184,7 +188,7 @@ private fun TopBar(
         Icon(
             Icons.Default.Menu,
             contentDescription = null,
-            tint = DarkOnBackground.copy(alpha = 0.5f),
+            tint = TextSecondary,
             modifier = Modifier.size(16.dp).clickable { onMenuClick() }
         )
     }
@@ -236,7 +240,18 @@ private fun WifiSsidChip() {
     }
 
     val isConnected = !label.startsWith("WiFi not") && label.isNotEmpty()
-    Chip(label, active = true, color = if (isConnected) DarkSuccess else DarkWarning)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        StatusDot(color = if (isConnected) Green else Warning)
+        Text(
+            label,
+            color = if (isConnected) Green else Warning,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
 }
 
 // ── Left Panel ────────────────────────────────────────────────────────────────
@@ -257,23 +272,22 @@ private fun LeftPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(36.dp)
-                .border(1.dp, DarkPrimary)
+                .border(1.dp, AppBorder)
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
-                "+ NEW\nSESSION",
-                color = DarkPrimary,
-                fontSize = 8.sp,
-                lineHeight = 10.sp,
+                "+ NEW SESSION",
+                color = TextPrimary,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 0.3.sp,
+                letterSpacing = 0.5.sp,
                 textAlign = TextAlign.Center
             )
         }
         Text(
             "SHOTS · ${sessionImages.size}",
-            color = DarkOnBackground.copy(alpha = 0.45f),
+            color = TextDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp
         )
@@ -310,7 +324,7 @@ private fun ThumbnailCell(
                 .background(DarkSurfaceVariant)
                 .border(
                     width = if (active) 1.dp else 0.5.dp,
-                    color = if (active) DarkPrimary else DarkBorder
+                    color = if (active) AppBorderActive else AppBorder
                 )
         ) {
             AsyncImage(
@@ -323,17 +337,18 @@ private fun ThumbnailCell(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(2.dp)
-                        .background(DarkSuccess)
-                        .padding(horizontal = 2.dp, vertical = 1.dp)
+                        .padding(3.dp)
+                        .background(Green.copy(alpha = 0.90f))
+                        .size(16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("✓", color = Color.Black, fontSize = 6.sp, fontWeight = FontWeight.Bold)
+                    Text("✓", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
         Text(
             label,
-            color = if (active) DarkPrimary else DarkOnBackground.copy(alpha = 0.5f),
+            color = if (active) TextPrimary else TextDisabled,
             fontSize = 6.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -360,7 +375,7 @@ private fun CenterPanel(
     Box(
         modifier = modifier
             .background(Color(0xFF050F0F))
-            .border(1.dp, DarkPrimary)
+            .border(1.dp, AppBorder)
             .clip(RectangleShape)
     ) {
         if (deviceMode == DeviceMode.TETHERED_DSLR) {
@@ -379,13 +394,19 @@ private fun CenterPanel(
                         .clip(RectangleShape)
                 ) {
                     CameraPreview(modifier = Modifier.fillMaxSize(), imageCapture = imageCapture)
-                    Text(
-                        "LIVE",
-                        color = DarkPrimary.copy(alpha = 0.85f),
-                        fontSize = 8.sp,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
-                    )
+                    Row(
+                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        StatusDot(color = Green, size = 6.dp)
+                        Text(
+                            "LIVE",
+                            color = TextSecondary,
+                            fontSize = 8.sp,
+                            letterSpacing = 1.sp
+                        )
+                    }
                     Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                         val stroke = 1.5.dp.toPx()
                         val corner = 14.dp.toPx()
@@ -401,12 +422,12 @@ private fun CenterPanel(
                             Offset(w, h - corner) to Offset(w, h),
                             Offset(w, h) to Offset(w - corner, h),
                         ).forEach { (start, end) ->
-                            drawLine(DarkPrimary.copy(alpha = 0.55f), start, end, strokeWidth = stroke)
+                            drawLine(AppBorder.copy(alpha = 0.7f), start, end, strokeWidth = stroke)
                         }
                         // centre focus point
                         val fp = 9.dp.toPx()
                         drawRect(
-                            color = DarkPrimary.copy(alpha = 0.45f),
+                            color = AppBorder.copy(alpha = 0.6f),
                             topLeft = Offset(w / 2f - fp, h / 2f - fp),
                             size = Size(fp * 2, fp * 2),
                             style = Stroke(width = stroke)
@@ -419,7 +440,7 @@ private fun CenterPanel(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(DarkPrimary.copy(alpha = 0.3f))
+                        .background(AppBorder)
                 )
 
                 // ── Review pane + capture button (right ~42%) ────────
@@ -439,7 +460,7 @@ private fun CenterPanel(
                                 "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
                             else
                                 "REVIEW  ·  NO IMAGES",
-                            color = DarkPrimary.copy(alpha = 0.6f),
+                            color = TextDisabled,
                             fontSize = 7.sp,
                             letterSpacing = 0.4.sp,
                             modifier = Modifier.padding(bottom = 4.dp)
@@ -448,7 +469,7 @@ private fun CenterPanel(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
-                                .border(1.dp, DarkPrimary.copy(alpha = 0.35f))
+                                .border(1.dp, AppBorder)
                                 .background(Color(0xFF060E0E))
                         ) {
                             if (latestImage != null) {
@@ -461,7 +482,7 @@ private fun CenterPanel(
                             }
                         }
                     }
-                    HorizontalDivider(color = DarkPrimary.copy(alpha = 0.3f), thickness = 1.dp)
+                    HorizontalDivider(color = AppBorder, thickness = 1.dp)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -470,15 +491,15 @@ private fun CenterPanel(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, DarkPrimary)
-                                .background(DarkPrimary.copy(alpha = 0.10f))
+                                .border(1.dp, Blue)
+                                .background(Blue.copy(alpha = 0.10f))
                                 .clickable { onCapture() }
                                 .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 "◉  CAPTURE",
-                                color = DarkPrimary,
+                                color = Blue,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.5.sp
@@ -519,7 +540,7 @@ private fun TetheredPanel(
                 Offset(w - corner, 0f) to Offset(w, 0f), Offset(w, 0f) to Offset(w, corner),
                 Offset(0f, h - corner) to Offset(0f, h), Offset(0f, h) to Offset(corner, h),
                 Offset(w, h - corner) to Offset(w, h), Offset(w, h) to Offset(w - corner, h),
-            ).forEach { (s, e) -> drawLine(DarkPrimary.copy(alpha = 0.55f), s, e, strokeWidth = stroke) }
+            ).forEach { (s, e) -> drawLine(AppBorder.copy(alpha = 0.6f), s, e, strokeWidth = stroke) }
         }
 
         // Status row — top-left
@@ -529,10 +550,10 @@ private fun TetheredPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val (label, color) = when (status.state) {
-                TetheredState.CONNECTED    -> "TETHERED"      to DarkPrimary
-                TetheredState.CONNECTING   -> "CONNECTING…"   to DarkWarning
-                TetheredState.ERROR        -> "ERROR"          to DarkWarning
-                TetheredState.DISCONNECTED -> "NO CAMERA"      to DarkOnBackground.copy(alpha = 0.4f)
+                TetheredState.CONNECTED    -> "TETHERED"      to TextPrimary
+                TetheredState.CONNECTING   -> "CONNECTING…"   to Warning
+                TetheredState.ERROR        -> "ERROR"          to Warning
+                TetheredState.DISCONNECTED -> "NO CAMERA"      to TextDisabled
             }
             Text(label, color = color, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
             if (!status.cameraModel.isNullOrBlank()) {
@@ -544,7 +565,7 @@ private fun TetheredPanel(
         if (status.state == TetheredState.CONNECTED && latestImage != null) {
             Text(
                 latestImage.filename,
-                color = DarkPrimary.copy(alpha = 0.7f),
+                color = TextSecondary,
                 fontSize = 7.sp,
                 letterSpacing = 0.3.sp,
                 modifier = Modifier
@@ -679,7 +700,7 @@ private fun SessionHistoryBlock(
     Column(modifier = modifier) {
         Text(
             "SESSION HISTORY",
-            color = DarkOnBackground.copy(alpha = 0.45f),
+            color = TextDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp,
             modifier = Modifier.padding(bottom = 3.dp)
@@ -687,7 +708,7 @@ private fun SessionHistoryBlock(
         if (sessions.isEmpty()) {
             Text(
                 "— no sessions yet",
-                color = DarkOnBackground.copy(alpha = 0.25f),
+                color = TextDisabled,
                 fontSize = 7.sp
             )
         } else {
@@ -733,8 +754,8 @@ private fun SessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, if (isSelected) DarkPrimary else DarkBorder)
-            .background(if (isSelected) DarkPrimary.copy(alpha = 0.12f) else Color.Transparent)
+            .border(0.5.dp, if (isSelected) AppBorderActive else AppBorder)
+            .background(if (isSelected) AppSurfaceRaised else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 5.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -742,13 +763,13 @@ private fun SessionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 session.barcode,
-                color = if (isSelected) DarkPrimary else DarkOnBackground,
+                color = TextPrimary,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 relativeTimeLabel(session.startTime),
-                color = DarkOnBackground.copy(alpha = 0.35f),
+                color = TextDisabled,
                 fontSize = 7.sp
             )
         }
@@ -761,13 +782,13 @@ private fun SessionRow(
                 horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 if (allTransferred) {
-                    Text("✓", color = DarkSuccess, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                    Text("✓", color = Green, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                 } else if (anyFailed) {
-                    Text("✗", color = DarkWarning, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                    Text("✗", color = Warning, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
                     swc.imageCount.toString(),
-                    color = DarkOnBackground.copy(alpha = 0.8f),
+                    color = TextPrimary,
                     fontSize = 9.sp
                 )
             }
@@ -778,9 +799,9 @@ private fun SessionRow(
                     else       -> "OPEN"
                 },
                 color = when {
-                    isLive     -> DarkPrimary
-                    isComplete -> DarkSuccess
-                    else       -> DarkOnBackground.copy(alpha = 0.6f)
+                    isLive     -> Green
+                    isComplete -> Green
+                    else       -> TextSecondary
                 },
                 fontSize = 7.sp
             )
@@ -793,6 +814,7 @@ private fun SessionRow(
 @Composable
 private fun BottomBar(
     deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
+    activeSession: Session? = null,
     connectionProfiles: List<ConnectionProfile> = emptyList(),
     activeConnection: ConnectionProfile? = null,
     onConnectionSelected: (ConnectionProfile) -> Unit = {}
@@ -811,9 +833,29 @@ private fun BottomBar(
             onSelected = onConnectionSelected
         )
         Spacer(Modifier.weight(1f))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                "Active Session",
+                color = TextDisabled,
+                fontSize = 10.sp,
+                letterSpacing = 0.3.sp
+            )
+            Text(
+                activeSession?.barcode ?: "—",
+                color = TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 2.sp
+            )
+        }
+        Spacer(Modifier.weight(1f))
         Chip(
             label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered Mode" else "Native Mode",
-            active = true
+            active = true,
+            color = TextSecondary
         )
     }
 }
@@ -825,27 +867,31 @@ private fun ConnectionSelector(
     onSelected: (ConnectionProfile) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            modifier = Modifier
-                .border(1.dp, DarkPrimary)
-                .background(DarkPrimary.copy(alpha = 0.08f))
-                .clickable { expanded = true }
-                .padding(horizontal = 7.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("ACTIVE CONNECTION", color = DarkOnBackground.copy(alpha = 0.45f), fontSize = 8.sp)
-            Spacer(Modifier.width(5.dp))
-            Text(
-                activeProfile?.name ?: "None",
-                color = if (activeProfile != null) DarkPrimary else DarkOnBackground.copy(alpha = 0.35f),
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.width(4.dp))
-            Text("▾", color = DarkPrimary, fontSize = 9.sp)
-        }
-        DropdownMenu(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text("ACTIVE CONNECTION", color = TextDisabled, fontSize = 8.sp, letterSpacing = 0.3.sp)
+        StatusDot(color = Green, size = 5.dp)
+        Box {
+            Row(
+                modifier = Modifier
+                    .border(1.dp, AppBorder)
+                    .background(AppSurfaceRaised)
+                    .clickable { expanded = true }
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    activeProfile?.name ?: "None",
+                    color = if (activeProfile != null) TextPrimary else TextDisabled,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("▾", color = TextSecondary, fontSize = 9.sp)
+            }
+            DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier.background(DarkSurface).border(0.5.dp, DarkBorder)
@@ -869,20 +915,20 @@ private fun ConnectionSelector(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     if (profile.isActive) "● " else "  ",
-                                    color = DarkPrimary,
+                                    color = if (profile.isActive) Green else TextSecondary,
                                     fontSize = 8.sp
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Column {
                                     Text(
                                         profile.name,
-                                        color = if (profile.isActive) DarkPrimary else DarkOnBackground,
+                                        color = TextPrimary,
                                         fontSize = 9.sp,
                                         fontWeight = if (profile.isActive) FontWeight.Bold else FontWeight.Normal
                                     )
                                     Text(
                                         "${profile.host}:${profile.port}",
-                                        color = DarkOnBackground.copy(alpha = 0.45f),
+                                        color = TextDisabled,
                                         fontSize = 7.sp
                                     )
                                 }
@@ -890,13 +936,14 @@ private fun ConnectionSelector(
                         },
                         onClick = { onSelected(profile); expanded = false },
                         modifier = Modifier.background(
-                            if (profile.isActive) DarkPrimary.copy(alpha = 0.08f) else Color.Transparent
+                            if (profile.isActive) AppSurfaceRaised else Color.Transparent
                         )
                     )
                 }
             }
         }
-    }
+        } // end Box
+    } // end outer Row
 }
 
 @Composable
@@ -908,16 +955,20 @@ private fun FileTransfersButton(
     val hasErrors = transferQueue.any {
         it.uploadState == UploadState.FAILED || it.uploadState == UploadState.RETRY_REQUIRED
     }
-    val color = if (hasErrors) DarkWarning else DarkSuccess
 
-    Box(
+    Row(
         modifier = Modifier
-            .border(1.dp, color)
-            .background(color.copy(alpha = 0.1f))
+            .border(1.dp, AppBorder)
+            .background(AppSurfaceRaised)
             .clickable { showPanel = true }
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text("File Transfers", color = color, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        if (hasErrors) {
+            StatusDot(color = Warning)
+        }
+        Text("File Transfers", color = TextPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
     }
 
     if (showPanel) {
@@ -940,7 +991,7 @@ private fun FileTransfersButton(
                 ) {
                     Text(
                         "FILE TRANSFERS",
-                        color = DarkPrimary,
+                        color = TextPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.8.sp
@@ -1030,11 +1081,11 @@ private fun TransferPanelRow(
             )
         }
         val (badgeText, badgeColor) = when (image.uploadState) {
-            UploadState.PENDING        -> "PENDING"    to DarkOnBackground.copy(alpha = 0.4f)
-            UploadState.UPLOADING      -> "↑ UP"       to DarkPrimary
-            UploadState.UPLOADED       -> "✓"          to DarkSuccess
-            UploadState.FAILED         -> "FAILED"     to DarkWarning
-            UploadState.RETRY_REQUIRED -> "AUTO-RETRY" to DarkWarning
+            UploadState.PENDING        -> "PENDING"    to TextSecondary
+            UploadState.UPLOADING      -> "↑ UP"       to Blue
+            UploadState.UPLOADED       -> "✓"          to Green
+            UploadState.FAILED         -> "FAILED"     to Warning
+            UploadState.RETRY_REQUIRED -> "AUTO-RETRY" to Warning
         }
         Text(
             badgeText,
@@ -1076,4 +1127,14 @@ private fun Chip(label: String, active: Boolean, color: Color = DarkPrimary) {
             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
         )
     }
+}
+
+@Composable
+private fun StatusDot(color: Color = Green, size: androidx.compose.ui.unit.Dp = 6.dp) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(color)
+    )
 }

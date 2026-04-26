@@ -35,8 +35,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class ConfigSection(val label: String) {
-    GENERAL("General"),
     DEVICE_MODE("Device Mode"),
+    GENERAL("General"),
     CONNECTIONS("Connections"),
     FILE_NAMING("File Naming"),
     ABOUT("About")
@@ -58,7 +58,7 @@ fun ConfigScreen(
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(AppBackground)
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         ConfigSidebar(
@@ -66,7 +66,7 @@ fun ConfigScreen(
             onSelect = { selectedSection = it },
             onNavigateBack = onNavigateBack
         )
-        Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(DarkBorder))
+        Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(AppBorder))
         ConfigContent(
             section = selectedSection,
             settings = settings,
@@ -93,7 +93,7 @@ private fun ConfigSidebar(
         modifier = Modifier
             .width(120.dp)
             .fillMaxHeight()
-            .background(DarkSurface)
+            .background(AppSurface)
     ) {
         Row(
             modifier = Modifier
@@ -101,17 +101,15 @@ private fun ConfigSidebar(
                 .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("⊞", color = DarkPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(5.dp))
             Text(
                 "CONFIG",
-                color = DarkPrimary,
+                color = TextPrimary,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp
             )
         }
-        HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+        HorizontalDivider(color = AppBorder, thickness = 1.dp)
         Spacer(Modifier.height(4.dp))
         ConfigSection.entries.forEach { section ->
             ConfigNavItem(
@@ -121,7 +119,7 @@ private fun ConfigSidebar(
             )
         }
         Spacer(Modifier.weight(1f))
-        HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+        HorizontalDivider(color = AppBorder, thickness = 1.dp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -130,7 +128,7 @@ private fun ConfigSidebar(
         ) {
             Text(
                 "← MAIN SCREEN",
-                color = DarkPrimary,
+                color = TextSecondary,
                 fontSize = 8.sp,
                 letterSpacing = 0.5.sp,
                 fontWeight = FontWeight.Bold
@@ -145,18 +143,18 @@ private fun ConfigNavItem(label: String, selected: Boolean, onClick: () -> Unit)
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .background(if (selected) DarkPrimary.copy(alpha = 0.08f) else Color.Transparent),
+            .background(if (selected) Blue.copy(alpha = 0.08f) else Color.Transparent),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
                 .width(3.dp)
                 .height(30.dp)
-                .background(if (selected) DarkPrimary else Color.Transparent)
+                .background(if (selected) Blue else Color.Transparent)
         )
         Text(
             label,
-            color = if (selected) DarkPrimary else DarkOnBackground.copy(alpha = 0.6f),
+            color = if (selected) Blue else TextSecondary,
             fontSize = 9.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
@@ -182,19 +180,19 @@ private fun ConfigContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(DarkSurface)
+                .background(AppSurface)
                 .padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 section.label.uppercase(),
-                color = DarkOnBackground,
+                color = TextPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
         }
-        HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+        HorizontalDivider(color = AppBorder, thickness = 1.dp)
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -273,25 +271,25 @@ private fun ModeCard(
     Row(
         modifier = modifier
             .clickable { onClick() }
-            .border(1.dp, if (selected) DarkPrimary else DarkBorder)
-            .background(if (selected) DarkPrimary.copy(alpha = 0.06f) else Color.Transparent)
+            .border(1.dp, if (selected) Blue else AppBorder)
+            .background(if (selected) Blue.copy(alpha = 0.06f) else AppSurface)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             if (selected) "⊙" else "○",
-            color = if (selected) DarkPrimary else DarkOnBackground.copy(alpha = 0.4f),
+            color = if (selected) Blue else TextDisabled,
             fontSize = 10.sp
         )
         Column {
             Text(
                 title,
-                color = if (selected) DarkPrimary else DarkOnBackground.copy(alpha = 0.7f),
+                color = if (selected) Blue else TextSecondary,
                 fontSize = 9.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
             )
-            Text(subtitle, color = DarkOnBackground.copy(alpha = 0.35f), fontSize = 7.sp, letterSpacing = 0.3.sp)
+            Text(subtitle, color = TextDisabled, fontSize = 7.sp, letterSpacing = 0.3.sp)
         }
     }
 }
@@ -353,12 +351,12 @@ private fun ConnectionsSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(0.5.dp, DarkBorder)
+                .border(0.5.dp, AppBorder)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
             Text(
                 "No connections configured.",
-                color = DarkOnBackground.copy(alpha = 0.35f),
+                color = TextDisabled,
                 fontSize = 8.sp
             )
         }
@@ -369,20 +367,20 @@ private fun ConnectionsSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(0.5.dp, if (isEditingThis) DarkPrimary.copy(alpha = 0.5f) else DarkBorder)
-                .background(if (profile.isActive) DarkPrimary.copy(alpha = 0.04f) else Color.Transparent)
+                .border(0.5.dp, if (isEditingThis) Blue.copy(alpha = 0.5f) else AppBorder)
+                .background(if (profile.isActive) AppSurfaceRaised else Color.Transparent)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .border(0.5.dp, DarkBorder)
+                    .border(0.5.dp, AppBorder)
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
                 Text(
                     profile.connectionType.badge,
-                    color = DarkOnBackground.copy(alpha = 0.5f),
+                    color = TextDisabled,
                     fontSize = 6.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp
@@ -390,23 +388,23 @@ private fun ConnectionsSection(
             }
             Text(
                 profile.name.ifBlank { "(unnamed)" },
-                color = if (profile.isActive) DarkPrimary else DarkOnBackground.copy(alpha = 0.8f),
+                color = if (profile.isActive) TextPrimary else TextSecondary,
                 fontSize = 9.sp,
                 fontWeight = if (profile.isActive) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
             if (profile.isActive) {
-                Text("● ACTIVE", color = DarkSuccess, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                Text("● ACTIVE", color = Green, fontSize = 7.sp, fontWeight = FontWeight.Bold)
             } else {
                 Box(
                     modifier = Modifier
                         .clickable { onSetActive(profile) }
-                        .border(0.5.dp, DarkBorder)
+                        .border(0.5.dp, AppBorder)
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         "SET ACTIVE",
-                        color = DarkOnBackground.copy(alpha = 0.4f),
+                        color = TextDisabled,
                         fontSize = 7.sp
                     )
                 }
@@ -414,13 +412,13 @@ private fun ConnectionsSection(
             Box(
                 modifier = Modifier
                     .clickable { editingId = if (isEditingThis) null else profile.id }
-                    .border(0.5.dp, if (isEditingThis) DarkPrimary else DarkBorder)
-                    .background(if (isEditingThis) DarkPrimary.copy(alpha = 0.08f) else Color.Transparent)
+                    .border(0.5.dp, if (isEditingThis) Blue else AppBorder)
+                    .background(if (isEditingThis) Blue.copy(alpha = 0.08f) else Color.Transparent)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
                     if (isEditingThis) "CLOSE" else "EDIT",
-                    color = if (isEditingThis) DarkPrimary else DarkOnBackground.copy(alpha = 0.5f),
+                    color = if (isEditingThis) Blue else TextSecondary,
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -433,7 +431,7 @@ private fun ConnectionsSection(
                     }
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                Text("×", color = DarkOnBackground.copy(alpha = 0.35f), fontSize = 14.sp)
+                Text("×", color = TextDisabled, fontSize = 14.sp)
             }
         }
         if (isEditingThis) {
@@ -454,13 +452,13 @@ private fun ConnectionsSection(
     if (editingId != -1L) {
         Box(
             modifier = Modifier
-                .border(0.5.dp, DarkBorder)
+                .border(0.5.dp, AppBorder)
                 .clickable { editingId = -1L }
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
             Text(
                 "+ ADD CONNECTION",
-                color = DarkPrimary,
+                color = Blue,
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
@@ -469,7 +467,7 @@ private fun ConnectionsSection(
     } else {
         Text(
             "NEW CONNECTION",
-            color = DarkPrimary.copy(alpha = 0.6f),
+            color = Blue.copy(alpha = 0.6f),
             fontSize = 7.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
@@ -503,21 +501,21 @@ private fun ConnectionEditForm(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, DarkPrimary.copy(alpha = 0.3f))
-            .background(DarkSurface.copy(alpha = 0.6f))
+            .border(0.5.dp, AppBorder)
+            .background(AppSurface)
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         ConfigTextField("Name", draft.name) { onDraftChange(draft.copy(name = it)) }
 
         Row(
-            modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder)
+            modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "Type",
-                color = DarkOnBackground.copy(alpha = 0.5f),
+                color = TextSecondary,
                 fontSize = 8.sp,
                 modifier = Modifier.width(84.dp)
             )
@@ -525,22 +523,22 @@ private fun ConnectionEditForm(
                 Row(
                     modifier = Modifier
                         .clickable { typeExpanded = true }
-                        .border(0.5.dp, DarkBorder)
+                        .border(0.5.dp, AppBorder)
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(draft.connectionType.label, color = DarkOnBackground.copy(alpha = 0.75f), fontSize = 8.sp)
-                    Text("▾", color = DarkOnBackground.copy(alpha = 0.4f), fontSize = 8.sp)
+                    Text(draft.connectionType.label, color = TextPrimary, fontSize = 8.sp)
+                    Text("▾", color = TextSecondary, fontSize = 8.sp)
                 }
                 DropdownMenu(
                     expanded = typeExpanded,
                     onDismissRequest = { typeExpanded = false },
-                    modifier = Modifier.background(DarkSurface)
+                    modifier = Modifier.background(AppSurface)
                 ) {
                     ConnectionType.entries.forEach { type ->
                         DropdownMenuItem(
-                            text = { Text(type.label, color = DarkOnBackground, fontSize = 9.sp) },
+                            text = { Text(type.label, color = TextPrimary, fontSize = 9.sp) },
                             onClick = { onDraftChange(draft.copy(connectionType = type)); typeExpanded = false }
                         )
                     }
@@ -566,10 +564,10 @@ private fun ConnectionEditForm(
         ) {
             if (draft.connectionType == ConnectionType.FTP) {
                 val (testLabel, testColor, testBg) = when (testState) {
-                    ConnTestState.IDLE    -> Triple("TEST", DarkPrimary, DarkPrimary.copy(alpha = 0.08f))
-                    ConnTestState.TESTING -> Triple("TESTING...", DarkOnBackground.copy(alpha = 0.5f), Color.Transparent)
-                    ConnTestState.SUCCESS -> Triple("● OK", DarkSuccess, DarkSuccess.copy(alpha = 0.08f))
-                    ConnTestState.FAILED  -> Triple("⚠ FAILED", DarkWarning, DarkWarning.copy(alpha = 0.08f))
+                    ConnTestState.IDLE    -> Triple("TEST", Blue, Blue.copy(alpha = 0.08f))
+                    ConnTestState.TESTING -> Triple("TESTING...", TextSecondary, Color.Transparent)
+                    ConnTestState.SUCCESS -> Triple("● OK", Green, Green.copy(alpha = 0.08f))
+                    ConnTestState.FAILED  -> Triple("⚠ FAILED", Warning, Warning.copy(alpha = 0.08f))
                 }
                 Box(
                     modifier = Modifier
@@ -583,7 +581,7 @@ private fun ConnectionEditForm(
                 if (testState == ConnTestState.FAILED && testError.isNotBlank()) {
                     Text(
                         testError,
-                        color = DarkWarning,
+                        color = Warning,
                         fontSize = 7.sp,
                         modifier = Modifier.weight(1f)
                     )
@@ -595,23 +593,23 @@ private fun ConnectionEditForm(
             }
             Box(
                 modifier = Modifier
-                    .border(0.5.dp, DarkBorder)
+                    .border(0.5.dp, AppBorder)
                     .clickable { onCancel() }
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                Text("CANCEL", color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("CANCEL", color = TextSecondary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
             val canSave = draft.name.isNotBlank()
             Box(
                 modifier = Modifier
-                    .border(1.dp, if (canSave) DarkPrimary else DarkBorder)
-                    .background(if (canSave) DarkPrimary.copy(alpha = 0.08f) else Color.Transparent)
+                    .border(1.dp, if (canSave) Blue else AppBorder)
+                    .background(if (canSave) Blue.copy(alpha = 0.08f) else Color.Transparent)
                     .clickable(enabled = canSave) { onSave() }
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
                 Text(
                     "SAVE PROFILE",
-                    color = if (canSave) DarkPrimary else DarkOnBackground.copy(alpha = 0.3f),
+                    color = if (canSave) Blue else TextDisabled,
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -649,49 +647,49 @@ private fun FileNamingSection(settings: AppSettings, onChange: (AppSettings) -> 
     Spacer(Modifier.height(4.dp))
     Box(
         modifier = Modifier
-            .border(0.5.dp, DarkBorder)
+            .border(0.5.dp, AppBorder)
             .clickable { onChange(settings.copy(namingFields = settings.namingFields + NamingField(FieldType.CUSTOM))) }
             .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
-        Text("+ ADD FIELD", color = DarkPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+        Text("+ ADD FIELD", color = Blue, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
     }
     Spacer(Modifier.height(10.dp))
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Separator", color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text("Separator", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
         listOf("_", "-", ".").forEach { sep ->
             val sel = sep == settings.namingSeparator
             Box(
                 modifier = Modifier
                     .clickable { onChange(settings.copy(namingSeparator = sep)) }
-                    .border(1.dp, if (sel) DarkPrimary else DarkBorder)
-                    .background(if (sel) DarkPrimary.copy(alpha = 0.1f) else Color.Transparent)
+                    .border(1.dp, if (sel) Blue else AppBorder)
+                    .background(if (sel) Blue.copy(alpha = 0.1f) else Color.Transparent)
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
-                Text(sep, color = if (sel) DarkPrimary else DarkOnBackground.copy(alpha = 0.5f), fontSize = 9.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                Text(sep, color = if (sel) Blue else TextSecondary, fontSize = 9.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
             }
         }
     }
     Spacer(Modifier.height(6.dp))
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Extension", color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text("Extension", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
         listOf("JPG", "DNG", "RAW").forEach { ext ->
             val sel = ext == settings.namingExtension
             Box(
                 modifier = Modifier
                     .clickable { onChange(settings.copy(namingExtension = ext)) }
-                    .border(1.dp, if (sel) DarkPrimary else DarkBorder)
-                    .background(if (sel) DarkPrimary.copy(alpha = 0.1f) else Color.Transparent)
+                    .border(1.dp, if (sel) Blue else AppBorder)
+                    .background(if (sel) Blue.copy(alpha = 0.1f) else Color.Transparent)
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
-                Text(ext, color = if (sel) DarkPrimary else DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                Text(ext, color = if (sel) Blue else TextSecondary, fontSize = 8.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
             }
         }
     }
@@ -700,13 +698,13 @@ private fun FileNamingSection(settings: AppSettings, onChange: (AppSettings) -> 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, DarkBorder)
-            .background(Color(0xFF111111))
+            .border(0.5.dp, AppBorder)
+            .background(AppBackground)
             .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
         Text(
             "${buildNamingPreview(settings.namingFields, settings.namingSeparator)}.${settings.namingExtension}",
-            color = DarkPrimary,
+            color = TextPrimary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.3.sp
@@ -726,14 +724,14 @@ private fun NamingFieldRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, DarkBorder)
+            .border(0.5.dp, AppBorder)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             "FIELD $number",
-            color = DarkOnBackground.copy(alpha = 0.4f),
+            color = TextDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp,
             modifier = Modifier.width(44.dp)
@@ -742,23 +740,23 @@ private fun NamingFieldRow(
             Row(
                 modifier = Modifier
                     .clickable { expanded = true }
-                    .border(0.5.dp, DarkPrimary.copy(alpha = 0.5f))
-                    .background(DarkPrimary.copy(alpha = 0.06f))
+                    .border(0.5.dp, Blue.copy(alpha = 0.5f))
+                    .background(Blue.copy(alpha = 0.06f))
                     .padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(field.type.label, color = DarkPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                Text("▾", color = DarkPrimary.copy(alpha = 0.6f), fontSize = 8.sp)
+                Text(field.type.label, color = Blue, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("▾", color = Blue.copy(alpha = 0.6f), fontSize = 8.sp)
             }
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier.background(DarkSurface)
+                modifier = Modifier.background(AppSurface)
             ) {
                 FieldType.entries.forEach { type ->
                     DropdownMenuItem(
-                        text = { Text(type.label, color = DarkOnBackground, fontSize = 9.sp) },
+                        text = { Text(type.label, color = TextPrimary, fontSize = 9.sp) },
                         onClick = { onTypeChange(type); expanded = false }
                     )
                 }
@@ -768,19 +766,19 @@ private fun NamingFieldRow(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .background(Color(0xFF111111))
-                    .border(0.5.dp, DarkBorder)
+                    .background(AppBackground)
+                    .border(0.5.dp, AppBorder)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (field.customValue.isEmpty()) {
-                    Text("Enter text...", color = DarkOnBackground.copy(alpha = 0.25f), fontSize = 9.sp)
+                    Text("Enter text...", color = TextDisabled, fontSize = 9.sp)
                 }
                 BasicTextField(
                     value = field.customValue,
                     onValueChange = onCustomValueChange,
-                    textStyle = TextStyle(color = DarkOnBackground, fontSize = 9.sp),
-                    cursorBrush = SolidColor(DarkPrimary),
+                    textStyle = TextStyle(color = TextPrimary, fontSize = 9.sp),
+                    cursorBrush = SolidColor(Blue),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -795,7 +793,7 @@ private fun NamingFieldRow(
         ) {
             Text(
                 "×",
-                color = if (onRemove != null) DarkOnBackground.copy(alpha = 0.35f) else Color.Transparent,
+                color = if (onRemove != null) TextDisabled else Color.Transparent,
                 fontSize = 14.sp
             )
         }
@@ -885,13 +883,13 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
     val scope = rememberCoroutineScope()
     Box(
         modifier = Modifier
-            .border(1.dp, if (cacheCleared) DarkSuccess else DarkBorder)
+            .border(1.dp, if (cacheCleared) Green else AppBorder)
             .clickable { if (!cacheCleared) showClearDialog = true }
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
         Text(
             if (cacheCleared) "✓ CACHE CLEARED" else "CLEAR APP CACHE",
-            color = if (cacheCleared) DarkSuccess else DarkOnBackground.copy(alpha = 0.6f),
+            color = if (cacheCleared) Green else TextSecondary,
             fontSize = 8.sp,
             fontWeight = FontWeight.Bold
         )
@@ -899,21 +897,21 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            containerColor = DarkSurface,
-            titleContentColor = DarkOnBackground,
+            containerColor = AppSurface,
+            titleContentColor = TextPrimary,
             title = { Text("Clear App Cache?", fontSize = 13.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("WILL BE DELETED:", color = DarkWarning, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Text("· Image preview cache", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
-                    Text("· Temporary app files", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
+                    Text("WILL BE DELETED:", color = Warning, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· Image preview cache", color = TextSecondary, fontSize = 9.sp)
+                    Text("· Temporary app files", color = TextSecondary, fontSize = 9.sp)
                     Spacer(Modifier.height(2.dp))
-                    Text("WILL NOT BE DELETED:", color = DarkSuccess, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Text("· Session data and history", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
-                    Text("· Captured images", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
-                    Text("· Connection profiles", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
-                    Text("· Transfer queue", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
-                    Text("· App settings", color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp)
+                    Text("WILL NOT BE DELETED:", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· Session data and history", color = TextSecondary, fontSize = 9.sp)
+                    Text("· Captured images", color = TextSecondary, fontSize = 9.sp)
+                    Text("· Connection profiles", color = TextSecondary, fontSize = 9.sp)
+                    Text("· Transfer queue", color = TextSecondary, fontSize = 9.sp)
+                    Text("· App settings", color = TextSecondary, fontSize = 9.sp)
                 }
             },
             confirmButton = {
@@ -925,12 +923,12 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
                     showClearDialog = false
                     cacheCleared = true
                 }) {
-                    Text("CLEAR CACHE", color = DarkWarning, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("CLEAR CACHE", color = Warning, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
-                    Text("CANCEL", color = DarkPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("CANCEL", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         )
@@ -956,24 +954,24 @@ private fun formatStorageBytes(bytes: Long): String = when {
 
 @Composable
 private fun StorageRow(label: String, fraction: Float, usedLabel: String, totalLabel: String, isWarning: Boolean) {
-    val barColor = if (isWarning) DarkWarning else DarkPrimary
+    val barColor = if (isWarning) Warning else Blue
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, DarkBorder)
+            .border(0.5.dp, AppBorder)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(label, color = DarkOnBackground.copy(alpha = 0.6f), fontSize = 8.sp, modifier = Modifier.width(52.dp))
+        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.width(52.dp))
         LinearProgressIndicator(
             progress = { fraction },
             modifier = Modifier.weight(1f).height(5.dp),
             color = barColor,
-            trackColor = DarkBorder
+            trackColor = AppBorder
         )
         Text(usedLabel, color = barColor, fontSize = 8.sp, modifier = Modifier.width(28.dp))
-        Text(totalLabel, color = DarkOnBackground.copy(alpha = 0.4f), fontSize = 8.sp)
+        Text(totalLabel, color = TextDisabled, fontSize = 8.sp)
     }
 }
 
@@ -981,31 +979,31 @@ private fun StorageRow(label: String, fraction: Float, usedLabel: String, totalL
 
 @Composable
 private fun AboutSection() {
-    Text("PhotoFlow Mobile", color = DarkPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp)
+    Text("PhotoFlow Mobile", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp)
     Text(
         "Professional field operations — barcode-based image capture and background FTP transfer.",
-        color = DarkOnBackground.copy(alpha = 0.65f),
+        color = TextSecondary,
         fontSize = 9.sp,
         lineHeight = 14.sp
     )
     Spacer(Modifier.height(6.dp))
-    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+    HorizontalDivider(color = AppBorder, thickness = 0.5.dp)
     Spacer(Modifier.height(6.dp))
     InfoRow("Version",  "1.0.0-dev")
     InfoRow("Build",    "001")
     InfoRow("Released", "2026-04-20")
     Spacer(Modifier.height(6.dp))
-    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+    HorizontalDivider(color = AppBorder, thickness = 0.5.dp)
     Spacer(Modifier.height(6.dp))
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Support", color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, modifier = Modifier.weight(1f))
-        Text("john.amedeo@gmail.com", color = DarkPrimary, fontSize = 8.sp)
+        Text("Support", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text("john.amedeo@gmail.com", color = TextPrimary, fontSize = 8.sp)
     }
     Spacer(Modifier.height(8.dp))
-    Text("© 2026 PhotoFlow", color = DarkOnBackground.copy(alpha = 0.25f), fontSize = 7.sp)
+    Text("© 2026 PhotoFlow", color = TextDisabled, fontSize = 7.sp)
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
@@ -1017,8 +1015,8 @@ private fun SectionLabel(text: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(text, color = DarkOnBackground.copy(alpha = 0.35f), fontSize = 7.sp, letterSpacing = 0.8.sp)
-        HorizontalDivider(color = DarkBorder.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.weight(1f))
+        Text(text, color = TextDisabled, fontSize = 7.sp, letterSpacing = 0.8.sp)
+        HorizontalDivider(color = AppBorder.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1031,15 +1029,15 @@ private fun ConfigTextField(
     onValueChange: (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, modifier = Modifier.width(84.dp))
+        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.width(84.dp))
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = TextStyle(color = DarkOnBackground, fontSize = 9.sp),
-            cursorBrush = SolidColor(DarkPrimary),
+            textStyle = TextStyle(color = TextPrimary, fontSize = 9.sp),
+            cursorBrush = SolidColor(Blue),
             singleLine = true,
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -1051,18 +1049,18 @@ private fun ConfigTextField(
 @Composable
 private fun ConfigToggleRow(label: String, value: Boolean, onToggle: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp, modifier = Modifier.weight(1f))
+        Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
         Box(
             modifier = Modifier
                 .clickable { onToggle() }
-                .border(1.dp, if (value) DarkPrimary else DarkBorder)
-                .background(if (value) DarkPrimary.copy(alpha = 0.12f) else Color.Transparent)
+                .border(1.dp, if (value) Blue else AppBorder)
+                .background(if (value) Blue.copy(alpha = 0.12f) else Color.Transparent)
                 .padding(horizontal = 8.dp, vertical = 2.dp)
         ) {
-            Text(if (value) "ON" else "OFF", color = if (value) DarkPrimary else DarkOnBackground.copy(alpha = 0.4f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            Text(if (value) "ON" else "OFF", color = if (value) Blue else TextDisabled, fontSize = 8.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1071,26 +1069,26 @@ private fun ConfigToggleRow(label: String, value: Boolean, onToggle: () -> Unit)
 private fun ConfigDropdownRow(label: String, value: String, options: List<String>, onSelect: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 9.sp, modifier = Modifier.weight(1f))
+        Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
         Box {
             Row(
                 modifier = Modifier
                     .clickable { expanded = true }
-                    .border(0.5.dp, DarkBorder)
+                    .border(0.5.dp, AppBorder)
                     .padding(horizontal = 8.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(value, color = DarkOnBackground.copy(alpha = 0.75f), fontSize = 8.sp)
-                Text("▾", color = DarkOnBackground.copy(alpha = 0.4f), fontSize = 8.sp)
+                Text(value, color = TextPrimary, fontSize = 8.sp)
+                Text("▾", color = TextSecondary, fontSize = 8.sp)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(DarkSurface)) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(AppSurface)) {
                 options.forEachIndexed { idx, option ->
                     DropdownMenuItem(
-                        text = { Text(option, color = DarkOnBackground, fontSize = 9.sp) },
+                        text = { Text(option, color = TextPrimary, fontSize = 9.sp) },
                         onClick = { onSelect(idx); expanded = false }
                     )
                 }
@@ -1102,10 +1100,10 @@ private fun ConfigDropdownRow(label: String, value: String, options: List<String
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, DarkBorder).padding(horizontal = 10.dp, vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 8.sp, modifier = Modifier.weight(1f))
-        Text(value, color = DarkOnBackground.copy(alpha = 0.8f), fontSize = 8.sp)
+        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text(value, color = TextPrimary, fontSize = 8.sp)
     }
 }
