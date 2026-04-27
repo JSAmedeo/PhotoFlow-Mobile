@@ -21,11 +21,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.app.Activity
+import android.content.res.Configuration
 import android.os.Environment
 import android.os.StatFs
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.photoflowmobile.app.data.model.*
 import com.photoflowmobile.app.ui.theme.*
@@ -54,21 +57,25 @@ fun ConfigScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     var selectedSection by remember { mutableStateOf(ConfigSection.DEVICE_MODE) }
     val connectionProfiles by viewModel.connectionProfiles.collectAsStateWithLifecycle()
+    val configuration = LocalConfiguration.current
+    val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+    val activity = LocalContext.current as? Activity
 
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppBackground)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-    ) {
-        ConfigSidebar(
-            selected = selectedSection,
-            onSelect = { selectedSection = it },
-            onNavigateBack = onNavigateBack
-        )
-        Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(AppBorder))
-        ConfigContent(
-            section = selectedSection,
+    LaunchedEffect(settings.orientationLockEnabled, settings.orientationLock) {
+        activity?.requestedOrientation = if (!settings.orientationLockEnabled) {
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        } else when (settings.orientationLock) {
+            OrientationLock.LANDSCAPE     -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            OrientationLock.LANDSCAPE_180 -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            OrientationLock.PORTRAIT      -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            OrientationLock.PORTRAIT_180  -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+        }
+    }
+
+    if (isPortrait) {
+        PortraitConfigLayout(
+            selectedSection = selectedSection,
+            onSectionSelect = { selectedSection = it },
             settings = settings,
             onSettingsChange = { viewModel.save(it) },
             connectionProfiles = connectionProfiles,
@@ -76,7 +83,121 @@ fun ConfigScreen(
             onDeleteProfile = viewModel::deleteProfile,
             onSetActiveProfile = viewModel::setActiveProfile,
             onTestConnection = viewModel::testConnection,
-            modifier = Modifier.weight(1f).fillMaxHeight()
+            onNavigateBack = onNavigateBack
+        )
+    } else {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(LocalAppColors.current.background)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+        ) {
+            ConfigSidebar(
+                selected = selectedSection,
+                onSelect = { selectedSection = it },
+                onNavigateBack = onNavigateBack
+            )
+            Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(LocalAppColors.current.border))
+            ConfigContent(
+                section = selectedSection,
+                settings = settings,
+                onSettingsChange = { viewModel.save(it) },
+                connectionProfiles = connectionProfiles,
+                onUpsertProfile = viewModel::upsertProfile,
+                onDeleteProfile = viewModel::deleteProfile,
+                onSetActiveProfile = viewModel::setActiveProfile,
+                onTestConnection = viewModel::testConnection,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            )
+        }
+    }
+}
+
+@Composable
+private fun PortraitConfigLayout(
+    selectedSection: ConfigSection,
+    onSectionSelect: (ConfigSection) -> Unit,
+    settings: AppSettings,
+    onSettingsChange: (AppSettings) -> Unit,
+    connectionProfiles: List<ConnectionProfile>,
+    onUpsertProfile: (ConnectionProfile) -> Unit,
+    onDeleteProfile: (ConnectionProfile) -> Unit,
+    onSetActiveProfile: (ConnectionProfile) -> Unit,
+    onTestConnection: (ConnectionProfile, (String?) -> Unit) -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    val sections = ConfigSection.entries
+    val selectedIndex = sections.indexOf(selectedSection)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LocalAppColors.current.background)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+    ) {
+        // Top bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LocalAppColors.current.surface)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "CONFIG",
+                color = LocalAppColors.current.textPrimary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "← MAIN SCREEN",
+                color = LocalAppColors.current.textSecondary,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+                modifier = Modifier.clickable { onNavigateBack() }
+            )
+        }
+        HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+
+        // Scrollable tab row
+        ScrollableTabRow(
+            selectedTabIndex = selectedIndex,
+            containerColor = LocalAppColors.current.surface,
+            contentColor = LocalAppColors.current.blue,
+            edgePadding = 0.dp,
+            divider = { HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp) }
+        ) {
+            sections.forEachIndexed { index, section ->
+                Tab(
+                    selected = index == selectedIndex,
+                    onClick = { onSectionSelect(section) },
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    Text(
+                        section.label.uppercase(),
+                        color = if (index == selectedIndex) LocalAppColors.current.blue else LocalAppColors.current.textPrimary,
+                        fontSize = 8.sp,
+                        fontWeight = if (index == selectedIndex) FontWeight.Bold else FontWeight.Normal,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+            }
+        }
+
+        // Full-width content
+        ConfigContent(
+            section = selectedSection,
+            settings = settings,
+            onSettingsChange = onSettingsChange,
+            connectionProfiles = connectionProfiles,
+            onUpsertProfile = onUpsertProfile,
+            onDeleteProfile = onDeleteProfile,
+            onSetActiveProfile = onSetActiveProfile,
+            onTestConnection = onTestConnection,
+            modifier = Modifier.weight(1f).fillMaxWidth()
         )
     }
 }
@@ -93,7 +214,7 @@ private fun ConfigSidebar(
         modifier = Modifier
             .width(120.dp)
             .fillMaxHeight()
-            .background(AppSurface)
+            .background(LocalAppColors.current.surface)
     ) {
         Row(
             modifier = Modifier
@@ -103,13 +224,13 @@ private fun ConfigSidebar(
         ) {
             Text(
                 "CONFIG",
-                color = TextPrimary,
+                color = LocalAppColors.current.textPrimary,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp
             )
         }
-        HorizontalDivider(color = AppBorder, thickness = 1.dp)
+        HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
         Spacer(Modifier.height(4.dp))
         ConfigSection.entries.forEach { section ->
             ConfigNavItem(
@@ -119,7 +240,7 @@ private fun ConfigSidebar(
             )
         }
         Spacer(Modifier.weight(1f))
-        HorizontalDivider(color = AppBorder, thickness = 1.dp)
+        HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -128,7 +249,7 @@ private fun ConfigSidebar(
         ) {
             Text(
                 "← MAIN SCREEN",
-                color = TextSecondary,
+                color = LocalAppColors.current.textSecondary,
                 fontSize = 8.sp,
                 letterSpacing = 0.5.sp,
                 fontWeight = FontWeight.Bold
@@ -143,19 +264,19 @@ private fun ConfigNavItem(label: String, selected: Boolean, onClick: () -> Unit)
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .background(if (selected) Blue.copy(alpha = 0.08f) else Color.Transparent),
+            .background(if (selected) LocalAppColors.current.blue.copy(alpha = 0.08f) else Color.Transparent),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
                 .width(3.dp)
                 .height(30.dp)
-                .background(if (selected) Blue else Color.Transparent)
+                .background(if (selected) LocalAppColors.current.blue else Color.Transparent)
         )
         Text(
             label,
-            color = if (selected) Blue else TextSecondary,
-            fontSize = 9.sp,
+            color = if (selected) LocalAppColors.current.blue else LocalAppColors.current.textPrimary,
+            fontSize = 10.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
         )
@@ -180,19 +301,19 @@ private fun ConfigContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(AppSurface)
+                .background(LocalAppColors.current.surface)
                 .padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 section.label.uppercase(),
-                color = TextPrimary,
-                fontSize = 11.sp,
+                color = LocalAppColors.current.textPrimary,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
         }
-        HorizontalDivider(color = AppBorder, thickness = 1.dp)
+        HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -222,42 +343,45 @@ private fun ConfigContent(
 
 @Composable
 private fun DeviceModeSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        ModeCard(
-            title = "Tethered DSLR",
-            subtitle = "USB / LAN / WI-FI",
-            selected = settings.deviceMode == DeviceMode.TETHERED_DSLR,
-            onClick = { onChange(settings.copy(deviceMode = DeviceMode.TETHERED_DSLR)) },
-            modifier = Modifier.weight(1f)
-        )
-        ModeCard(
-            title = "Native Camera",
-            subtitle = "BUILT-IN SENSOR",
-            selected = settings.deviceMode == DeviceMode.NATIVE_CAMERA,
-            onClick = { onChange(settings.copy(deviceMode = DeviceMode.NATIVE_CAMERA)) },
-            modifier = Modifier.weight(1f)
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ModeCard(
+                title = "Tethered DSLR",
+                subtitle = "USB CONNECTION",
+                selected = settings.deviceMode == DeviceMode.TETHERED_DSLR,
+                onClick = { onChange(settings.copy(deviceMode = DeviceMode.TETHERED_DSLR)) },
+                modifier = Modifier.weight(1f)
+            )
+            ModeCard(
+                title = "Native Camera",
+                subtitle = "REAR FACING PHONE CAMERA",
+                selected = settings.deviceMode == DeviceMode.NATIVE_CAMERA,
+                onClick = { onChange(settings.copy(deviceMode = DeviceMode.NATIVE_CAMERA)) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        SectionLabel("DISPLAY MODE")
+        ConfigToggleRow("Dark mode", settings.darkMode) {
+            onChange(settings.copy(darkMode = !settings.darkMode))
+        }
+        Spacer(Modifier.height(6.dp))
+        SectionLabel("ORIENTATION LOCK")
+        ConfigToggleRow("Enable orientation lock", settings.orientationLockEnabled) {
+            onChange(settings.copy(orientationLockEnabled = !settings.orientationLockEnabled))
+        }
+        if (settings.orientationLockEnabled) {
+            ConfigDropdownRow(
+                label    = "Lock to",
+                value    = settings.orientationLock.label,
+                options  = OrientationLock.entries.map { it.label },
+                onSelect = { onChange(settings.copy(orientationLock = OrientationLock.entries[it])) }
+            )
+        }
     }
-    Spacer(Modifier.height(6.dp))
-    SectionLabel("ADVANCED")
-    ConfigToggleRow("Auto-reconnect", settings.autoReconnect) {
-        onChange(settings.copy(autoReconnect = !settings.autoReconnect))
-    }
-    ConfigDropdownRow(
-        label = "Preview quality",
-        value = settings.previewQuality.label,
-        options = PreviewQuality.entries.map { it.label },
-        onSelect = { onChange(settings.copy(previewQuality = PreviewQuality.entries[it])) }
-    )
-    ConfigDropdownRow(
-        label = "Session timeout",
-        value = settings.sessionTimeout.label,
-        options = SessionTimeout.entries.map { it.label },
-        onSelect = { onChange(settings.copy(sessionTimeout = SessionTimeout.entries[it])) }
-    )
 }
 
 @Composable
@@ -271,41 +395,31 @@ private fun ModeCard(
     Row(
         modifier = modifier
             .clickable { onClick() }
-            .border(1.dp, if (selected) Blue else AppBorder)
-            .background(if (selected) Blue.copy(alpha = 0.06f) else AppSurface)
+            .border(1.dp, if (selected) LocalAppColors.current.blue else LocalAppColors.current.border)
+            .background(if (selected) LocalAppColors.current.blue.copy(alpha = 0.06f) else LocalAppColors.current.surface)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             if (selected) "⊙" else "○",
-            color = if (selected) Blue else TextDisabled,
+            color = if (selected) LocalAppColors.current.blue else LocalAppColors.current.textDisabled,
             fontSize = 10.sp
         )
         Column {
             Text(
                 title,
-                color = if (selected) Blue else TextSecondary,
-                fontSize = 9.sp,
+                color = if (selected) LocalAppColors.current.blue else LocalAppColors.current.textSecondary,
+                fontSize = 11.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
             )
-            Text(subtitle, color = TextDisabled, fontSize = 7.sp, letterSpacing = 0.3.sp)
+            Text(subtitle, color = LocalAppColors.current.textDisabled, fontSize = 9.sp, letterSpacing = 0.3.sp)
         }
     }
 }
 
 // ── Section: Connections ──────────────────────────────────────────────────────
 
-private data class ConnFieldLabels(
-    val host: String, val port: String, val username: String,
-    val password: String, val remotePath: String
-)
-
-private fun connectionFieldLabels(type: ConnectionType) = when (type) {
-    ConnectionType.FTP      -> ConnFieldLabels("Host", "Port", "Username", "Password", "Remote Path")
-    ConnectionType.API_HOOK -> ConnFieldLabels("Base URL", "", "API Key", "Bearer Token", "Endpoint Path")
-    ConnectionType.CLOUD    -> ConnFieldLabels("Region / Endpoint", "", "Access Key", "Secret Key", "Bucket / Path")
-}
 
 @Composable
 private fun ConnectionsSection(
@@ -351,12 +465,12 @@ private fun ConnectionsSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(0.5.dp, AppBorder)
+                .border(0.5.dp, LocalAppColors.current.border)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
             Text(
                 "No connections configured.",
-                color = TextDisabled,
+                color = LocalAppColors.current.textDisabled,
                 fontSize = 8.sp
             )
         }
@@ -367,59 +481,59 @@ private fun ConnectionsSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(0.5.dp, if (isEditingThis) Blue.copy(alpha = 0.5f) else AppBorder)
-                .background(if (profile.isActive) AppSurfaceRaised else Color.Transparent)
+                .border(0.5.dp, if (isEditingThis) LocalAppColors.current.blue.copy(alpha = 0.5f) else LocalAppColors.current.border)
+                .background(if (profile.isActive) LocalAppColors.current.surfaceRaised else Color.Transparent)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .border(0.5.dp, AppBorder)
+                    .border(0.5.dp, LocalAppColors.current.border)
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
                 Text(
                     profile.connectionType.badge,
-                    color = TextDisabled,
-                    fontSize = 6.sp,
+                    color = LocalAppColors.current.textDisabled,
+                    fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp
                 )
             }
             Text(
                 profile.name.ifBlank { "(unnamed)" },
-                color = if (profile.isActive) TextPrimary else TextSecondary,
-                fontSize = 9.sp,
+                color = if (profile.isActive) LocalAppColors.current.textPrimary else LocalAppColors.current.textSecondary,
+                fontSize = 11.sp,
                 fontWeight = if (profile.isActive) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
             if (profile.isActive) {
-                Text("● ACTIVE", color = Green, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                Text("● ACTIVE", color = LocalAppColors.current.green, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             } else {
                 Box(
                     modifier = Modifier
                         .clickable { onSetActive(profile) }
-                        .border(0.5.dp, AppBorder)
+                        .border(0.5.dp, LocalAppColors.current.border)
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         "SET ACTIVE",
-                        color = TextDisabled,
-                        fontSize = 7.sp
+                        color = LocalAppColors.current.textDisabled,
+                        fontSize = 9.sp
                     )
                 }
             }
             Box(
                 modifier = Modifier
                     .clickable { editingId = if (isEditingThis) null else profile.id }
-                    .border(0.5.dp, if (isEditingThis) Blue else AppBorder)
-                    .background(if (isEditingThis) Blue.copy(alpha = 0.08f) else Color.Transparent)
+                    .border(0.5.dp, if (isEditingThis) LocalAppColors.current.blue else LocalAppColors.current.border)
+                    .background(if (isEditingThis) LocalAppColors.current.blue.copy(alpha = 0.08f) else Color.Transparent)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
                     if (isEditingThis) "CLOSE" else "EDIT",
-                    color = if (isEditingThis) Blue else TextSecondary,
-                    fontSize = 7.sp,
+                    color = if (isEditingThis) LocalAppColors.current.blue else LocalAppColors.current.textSecondary,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -431,7 +545,7 @@ private fun ConnectionsSection(
                     }
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                Text("×", color = TextDisabled, fontSize = 14.sp)
+                Text("×", color = LocalAppColors.current.textDisabled, fontSize = 14.sp)
             }
         }
         if (isEditingThis) {
@@ -452,13 +566,13 @@ private fun ConnectionsSection(
     if (editingId != -1L) {
         Box(
             modifier = Modifier
-                .border(0.5.dp, AppBorder)
+                .border(0.5.dp, LocalAppColors.current.border)
                 .clickable { editingId = -1L }
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
             Text(
                 "+ ADD CONNECTION",
-                color = Blue,
+                color = LocalAppColors.current.blue,
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
@@ -467,7 +581,7 @@ private fun ConnectionsSection(
     } else {
         Text(
             "NEW CONNECTION",
-            color = Blue.copy(alpha = 0.6f),
+            color = LocalAppColors.current.blue.copy(alpha = 0.6f),
             fontSize = 7.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
@@ -495,66 +609,22 @@ private fun ConnectionEditForm(
     onSave: () -> Unit,
     onCancel: () -> Unit
 ) {
-    val labels = connectionFieldLabels(draft.connectionType)
-    var typeExpanded by remember { mutableStateOf(false) }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, AppBorder)
-            .background(AppSurface)
+            .border(0.5.dp, LocalAppColors.current.border)
+            .background(LocalAppColors.current.surface)
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        ConfigTextField("Name", draft.name) { onDraftChange(draft.copy(name = it)) }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Type",
-                color = TextSecondary,
-                fontSize = 8.sp,
-                modifier = Modifier.width(84.dp)
-            )
-            Box {
-                Row(
-                    modifier = Modifier
-                        .clickable { typeExpanded = true }
-                        .border(0.5.dp, AppBorder)
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(draft.connectionType.label, color = TextPrimary, fontSize = 8.sp)
-                    Text("▾", color = TextSecondary, fontSize = 8.sp)
-                }
-                DropdownMenu(
-                    expanded = typeExpanded,
-                    onDismissRequest = { typeExpanded = false },
-                    modifier = Modifier.background(AppSurface)
-                ) {
-                    ConnectionType.entries.forEach { type ->
-                        DropdownMenuItem(
-                            text = { Text(type.label, color = TextPrimary, fontSize = 9.sp) },
-                            onClick = { onDraftChange(draft.copy(connectionType = type)); typeExpanded = false }
-                        )
-                    }
-                }
-            }
+        ConfigTextField("Name",        draft.name)                    { onDraftChange(draft.copy(name = it)) }
+        ConfigTextField("Host",        draft.host)                    { onDraftChange(draft.copy(host = it)) }
+        ConfigTextField("Port",        draft.port.toString(), keyboardType = KeyboardType.Number) {
+            onDraftChange(draft.copy(port = it.toIntOrNull() ?: draft.port))
         }
-
-        ConfigTextField(labels.host, draft.host) { onDraftChange(draft.copy(host = it)) }
-        if (draft.connectionType == ConnectionType.FTP) {
-            ConfigTextField(labels.port, draft.port.toString(), keyboardType = KeyboardType.Number) {
-                onDraftChange(draft.copy(port = it.toIntOrNull() ?: draft.port))
-            }
-        }
-        ConfigTextField(labels.username, draft.username) { onDraftChange(draft.copy(username = it)) }
-        ConfigTextField(labels.password, draft.password, isPassword = true) { onDraftChange(draft.copy(password = it)) }
-        ConfigTextField(labels.remotePath, draft.remotePath) { onDraftChange(draft.copy(remotePath = it)) }
+        ConfigTextField("Username",    draft.username)                { onDraftChange(draft.copy(username = it)) }
+        ConfigTextField("Password",    draft.password, isPassword = true) { onDraftChange(draft.copy(password = it)) }
+        ConfigTextField("Remote Path", draft.remotePath)              { onDraftChange(draft.copy(remotePath = it)) }
 
         Spacer(Modifier.height(2.dp))
         Row(
@@ -562,54 +632,45 @@ private fun ConnectionEditForm(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (draft.connectionType == ConnectionType.FTP) {
-                val (testLabel, testColor, testBg) = when (testState) {
-                    ConnTestState.IDLE    -> Triple("TEST", Blue, Blue.copy(alpha = 0.08f))
-                    ConnTestState.TESTING -> Triple("TESTING...", TextSecondary, Color.Transparent)
-                    ConnTestState.SUCCESS -> Triple("● OK", Green, Green.copy(alpha = 0.08f))
-                    ConnTestState.FAILED  -> Triple("⚠ FAILED", Warning, Warning.copy(alpha = 0.08f))
-                }
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, testColor)
-                        .background(testBg)
-                        .clickable(enabled = testState == ConnTestState.IDLE) { onTest() }
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(testLabel, color = testColor, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                }
-                if (testState == ConnTestState.FAILED && testError.isNotBlank()) {
-                    Text(
-                        testError,
-                        color = Warning,
-                        fontSize = 7.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+            val (testLabel, testColor, testBg) = when (testState) {
+                ConnTestState.IDLE    -> Triple("TEST", LocalAppColors.current.blue, LocalAppColors.current.blue.copy(alpha = 0.08f))
+                ConnTestState.TESTING -> Triple("TESTING...", LocalAppColors.current.textSecondary, Color.Transparent)
+                ConnTestState.SUCCESS -> Triple("● OK", LocalAppColors.current.green, LocalAppColors.current.green.copy(alpha = 0.08f))
+                ConnTestState.FAILED  -> Triple("⚠ FAILED", LocalAppColors.current.warning, LocalAppColors.current.warning.copy(alpha = 0.08f))
+            }
+            Box(
+                modifier = Modifier
+                    .border(1.dp, testColor)
+                    .background(testBg)
+                    .clickable(enabled = testState == ConnTestState.IDLE) { onTest() }
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(testLabel, color = testColor, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            }
+            if (testState == ConnTestState.FAILED && testError.isNotBlank()) {
+                Text(testError, color = LocalAppColors.current.warning, fontSize = 7.sp, modifier = Modifier.weight(1f))
             } else {
                 Spacer(Modifier.weight(1f))
             }
             Box(
                 modifier = Modifier
-                    .border(0.5.dp, AppBorder)
+                    .border(0.5.dp, LocalAppColors.current.border)
                     .clickable { onCancel() }
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                Text("CANCEL", color = TextSecondary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("CANCEL", color = LocalAppColors.current.textSecondary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
             val canSave = draft.name.isNotBlank()
             Box(
                 modifier = Modifier
-                    .border(1.dp, if (canSave) Blue else AppBorder)
-                    .background(if (canSave) Blue.copy(alpha = 0.08f) else Color.Transparent)
+                    .border(1.dp, if (canSave) LocalAppColors.current.blue else LocalAppColors.current.border)
+                    .background(if (canSave) LocalAppColors.current.blue.copy(alpha = 0.08f) else Color.Transparent)
                     .clickable(enabled = canSave) { onSave() }
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
                 Text(
                     "SAVE PROFILE",
-                    color = if (canSave) Blue else TextDisabled,
+                    color = if (canSave) LocalAppColors.current.blue else LocalAppColors.current.textDisabled,
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -647,49 +708,49 @@ private fun FileNamingSection(settings: AppSettings, onChange: (AppSettings) -> 
     Spacer(Modifier.height(4.dp))
     Box(
         modifier = Modifier
-            .border(0.5.dp, AppBorder)
+            .border(0.5.dp, LocalAppColors.current.border)
             .clickable { onChange(settings.copy(namingFields = settings.namingFields + NamingField(FieldType.CUSTOM))) }
             .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
-        Text("+ ADD FIELD", color = Blue, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+        Text("+ ADD FIELD", color = LocalAppColors.current.blue, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
     }
     Spacer(Modifier.height(10.dp))
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Separator", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text("Separator", color = LocalAppColors.current.textSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
         listOf("_", "-", ".").forEach { sep ->
             val sel = sep == settings.namingSeparator
             Box(
                 modifier = Modifier
                     .clickable { onChange(settings.copy(namingSeparator = sep)) }
-                    .border(1.dp, if (sel) Blue else AppBorder)
-                    .background(if (sel) Blue.copy(alpha = 0.1f) else Color.Transparent)
+                    .border(1.dp, if (sel) LocalAppColors.current.blue else LocalAppColors.current.border)
+                    .background(if (sel) LocalAppColors.current.blue.copy(alpha = 0.1f) else Color.Transparent)
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
-                Text(sep, color = if (sel) Blue else TextSecondary, fontSize = 9.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                Text(sep, color = if (sel) LocalAppColors.current.blue else LocalAppColors.current.textSecondary, fontSize = 9.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
             }
         }
     }
     Spacer(Modifier.height(6.dp))
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Extension", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
+        Text("Extension", color = LocalAppColors.current.textSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
         listOf("JPG", "DNG", "RAW").forEach { ext ->
             val sel = ext == settings.namingExtension
             Box(
                 modifier = Modifier
                     .clickable { onChange(settings.copy(namingExtension = ext)) }
-                    .border(1.dp, if (sel) Blue else AppBorder)
-                    .background(if (sel) Blue.copy(alpha = 0.1f) else Color.Transparent)
+                    .border(1.dp, if (sel) LocalAppColors.current.blue else LocalAppColors.current.border)
+                    .background(if (sel) LocalAppColors.current.blue.copy(alpha = 0.1f) else Color.Transparent)
                     .padding(horizontal = 10.dp, vertical = 2.dp)
             ) {
-                Text(ext, color = if (sel) Blue else TextSecondary, fontSize = 8.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                Text(ext, color = if (sel) LocalAppColors.current.blue else LocalAppColors.current.textSecondary, fontSize = 8.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
             }
         }
     }
@@ -698,13 +759,13 @@ private fun FileNamingSection(settings: AppSettings, onChange: (AppSettings) -> 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, AppBorder)
-            .background(AppBackground)
+            .border(0.5.dp, LocalAppColors.current.border)
+            .background(LocalAppColors.current.background)
             .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
         Text(
             "${buildNamingPreview(settings.namingFields, settings.namingSeparator)}.${settings.namingExtension}",
-            color = TextPrimary,
+            color = LocalAppColors.current.textPrimary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.3.sp
@@ -724,14 +785,14 @@ private fun NamingFieldRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, AppBorder)
+            .border(0.5.dp, LocalAppColors.current.border)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             "FIELD $number",
-            color = TextDisabled,
+            color = LocalAppColors.current.textDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp,
             modifier = Modifier.width(44.dp)
@@ -740,23 +801,23 @@ private fun NamingFieldRow(
             Row(
                 modifier = Modifier
                     .clickable { expanded = true }
-                    .border(0.5.dp, Blue.copy(alpha = 0.5f))
-                    .background(Blue.copy(alpha = 0.06f))
+                    .border(0.5.dp, LocalAppColors.current.blue.copy(alpha = 0.5f))
+                    .background(LocalAppColors.current.blue.copy(alpha = 0.06f))
                     .padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(field.type.label, color = Blue, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                Text("▾", color = Blue.copy(alpha = 0.6f), fontSize = 8.sp)
+                Text(field.type.label, color = LocalAppColors.current.blue, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("▾", color = LocalAppColors.current.blue.copy(alpha = 0.6f), fontSize = 8.sp)
             }
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier.background(AppSurface)
+                modifier = Modifier.background(LocalAppColors.current.surface)
             ) {
                 FieldType.entries.forEach { type ->
                     DropdownMenuItem(
-                        text = { Text(type.label, color = TextPrimary, fontSize = 9.sp) },
+                        text = { Text(type.label, color = LocalAppColors.current.textPrimary, fontSize = 9.sp) },
                         onClick = { onTypeChange(type); expanded = false }
                     )
                 }
@@ -766,19 +827,19 @@ private fun NamingFieldRow(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .background(AppBackground)
-                    .border(0.5.dp, AppBorder)
+                    .background(LocalAppColors.current.background)
+                    .border(0.5.dp, LocalAppColors.current.border)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (field.customValue.isEmpty()) {
-                    Text("Enter text...", color = TextDisabled, fontSize = 9.sp)
+                    Text("Enter text...", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
                 }
                 BasicTextField(
                     value = field.customValue,
                     onValueChange = onCustomValueChange,
-                    textStyle = TextStyle(color = TextPrimary, fontSize = 9.sp),
-                    cursorBrush = SolidColor(Blue),
+                    textStyle = TextStyle(color = LocalAppColors.current.textPrimary, fontSize = 9.sp),
+                    cursorBrush = SolidColor(LocalAppColors.current.blue),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -793,7 +854,7 @@ private fun NamingFieldRow(
         ) {
             Text(
                 "×",
-                color = if (onRemove != null) TextDisabled else Color.Transparent,
+                color = if (onRemove != null) LocalAppColors.current.textDisabled else Color.Transparent,
                 fontSize = 14.sp
             )
         }
@@ -883,13 +944,13 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
     val scope = rememberCoroutineScope()
     Box(
         modifier = Modifier
-            .border(1.dp, if (cacheCleared) Green else AppBorder)
+            .border(1.dp, if (cacheCleared) LocalAppColors.current.green else LocalAppColors.current.border)
             .clickable { if (!cacheCleared) showClearDialog = true }
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
         Text(
             if (cacheCleared) "✓ CACHE CLEARED" else "CLEAR APP CACHE",
-            color = if (cacheCleared) Green else TextSecondary,
+            color = if (cacheCleared) LocalAppColors.current.green else LocalAppColors.current.textSecondary,
             fontSize = 8.sp,
             fontWeight = FontWeight.Bold
         )
@@ -897,21 +958,21 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            containerColor = AppSurface,
-            titleContentColor = TextPrimary,
+            containerColor = LocalAppColors.current.surface,
+            titleContentColor = LocalAppColors.current.textPrimary,
             title = { Text("Clear App Cache?", fontSize = 13.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("WILL BE DELETED:", color = Warning, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Text("· Image preview cache", color = TextSecondary, fontSize = 9.sp)
-                    Text("· Temporary app files", color = TextSecondary, fontSize = 9.sp)
+                    Text("WILL BE DELETED:", color = LocalAppColors.current.warning, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· Image preview cache", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Temporary app files", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
                     Spacer(Modifier.height(2.dp))
-                    Text("WILL NOT BE DELETED:", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    Text("· Session data and history", color = TextSecondary, fontSize = 9.sp)
-                    Text("· Captured images", color = TextSecondary, fontSize = 9.sp)
-                    Text("· Connection profiles", color = TextSecondary, fontSize = 9.sp)
-                    Text("· Transfer queue", color = TextSecondary, fontSize = 9.sp)
-                    Text("· App settings", color = TextSecondary, fontSize = 9.sp)
+                    Text("WILL NOT BE DELETED:", color = LocalAppColors.current.green, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· Session data and history", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Captured images", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Connection profiles", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Transfer queue", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· App settings", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
                 }
             },
             confirmButton = {
@@ -923,20 +984,22 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
                     showClearDialog = false
                     cacheCleared = true
                 }) {
-                    Text("CLEAR CACHE", color = Warning, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("CLEAR CACHE", color = LocalAppColors.current.warning, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) {
-                    Text("CANCEL", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("CANCEL", color = LocalAppColors.current.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         )
     }
     Spacer(Modifier.height(10.dp))
-    SectionLabel("DIAGNOSTICS")
-    ConfigToggleRow("Verbose logging",    settings.verboseLogging)    { onChange(settings.copy(verboseLogging = !settings.verboseLogging)) }
-    ConfigToggleRow("Save crash reports", settings.saveCrashReports)  { onChange(settings.copy(saveCrashReports = !settings.saveCrashReports)) }
+    SectionLabel("LOGS")
+    ConfigToggleRow("Enable logging", settings.loggingEnabled) {
+        onChange(settings.copy(loggingEnabled = !settings.loggingEnabled))
+    }
+    InfoRow("Log Location", "PhotoFlow/Pipeline")
     Spacer(Modifier.height(10.dp))
     SectionLabel("APP INFO")
     InfoRow("Version",    "1.0.0-dev")
@@ -954,24 +1017,24 @@ private fun formatStorageBytes(bytes: Long): String = when {
 
 @Composable
 private fun StorageRow(label: String, fraction: Float, usedLabel: String, totalLabel: String, isWarning: Boolean) {
-    val barColor = if (isWarning) Warning else Blue
+    val barColor = if (isWarning) LocalAppColors.current.warning else LocalAppColors.current.blue
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, AppBorder)
+            .border(0.5.dp, LocalAppColors.current.border)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.width(52.dp))
+        Text(label, color = LocalAppColors.current.textSecondary, fontSize = 10.sp, modifier = Modifier.width(52.dp))
         LinearProgressIndicator(
             progress = { fraction },
             modifier = Modifier.weight(1f).height(5.dp),
             color = barColor,
-            trackColor = AppBorder
+            trackColor = LocalAppColors.current.border
         )
-        Text(usedLabel, color = barColor, fontSize = 8.sp, modifier = Modifier.width(28.dp))
-        Text(totalLabel, color = TextDisabled, fontSize = 8.sp)
+        Text(usedLabel, color = barColor, fontSize = 10.sp, modifier = Modifier.width(28.dp))
+        Text(totalLabel, color = LocalAppColors.current.textDisabled, fontSize = 10.sp)
     }
 }
 
@@ -979,31 +1042,21 @@ private fun StorageRow(label: String, fraction: Float, usedLabel: String, totalL
 
 @Composable
 private fun AboutSection() {
-    Text("PhotoFlow Mobile", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp)
+    Text("PhotoFlow Mobile", color = LocalAppColors.current.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp)
     Text(
         "Professional field operations — barcode-based image capture and background FTP transfer.",
-        color = TextSecondary,
-        fontSize = 9.sp,
-        lineHeight = 14.sp
+        color = LocalAppColors.current.textSecondary,
+        fontSize = 11.sp,
+        lineHeight = 16.sp
     )
     Spacer(Modifier.height(6.dp))
-    HorizontalDivider(color = AppBorder, thickness = 0.5.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 0.5.dp)
     Spacer(Modifier.height(6.dp))
     InfoRow("Version",  "1.0.0-dev")
     InfoRow("Build",    "001")
     InfoRow("Released", "2026-04-20")
-    Spacer(Modifier.height(6.dp))
-    HorizontalDivider(color = AppBorder, thickness = 0.5.dp)
-    Spacer(Modifier.height(6.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("Support", color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
-        Text("john.amedeo@gmail.com", color = TextPrimary, fontSize = 8.sp)
-    }
     Spacer(Modifier.height(8.dp))
-    Text("© 2026 PhotoFlow", color = TextDisabled, fontSize = 7.sp)
+    Text("© 2026 PhotoFlow", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
@@ -1015,8 +1068,8 @@ private fun SectionLabel(text: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(text, color = TextDisabled, fontSize = 7.sp, letterSpacing = 0.8.sp)
-        HorizontalDivider(color = AppBorder.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.weight(1f))
+        Text(text, color = LocalAppColors.current.textPrimary, fontSize = 9.sp, letterSpacing = 0.8.sp)
+        HorizontalDivider(color = LocalAppColors.current.border.copy(alpha = 0.5f), thickness = 0.5.dp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1029,15 +1082,15 @@ private fun ConfigTextField(
     onValueChange: (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.width(84.dp))
+        Text(label, color = LocalAppColors.current.textSecondary, fontSize = 11.sp, modifier = Modifier.width(96.dp))
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = TextStyle(color = TextPrimary, fontSize = 9.sp),
-            cursorBrush = SolidColor(Blue),
+            textStyle = TextStyle(color = LocalAppColors.current.textPrimary, fontSize = 12.sp),
+            cursorBrush = SolidColor(LocalAppColors.current.blue),
             singleLine = true,
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -1049,18 +1102,18 @@ private fun ConfigTextField(
 @Composable
 private fun ConfigToggleRow(label: String, value: Boolean, onToggle: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
+        Text(label, color = LocalAppColors.current.textSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Box(
             modifier = Modifier
                 .clickable { onToggle() }
-                .border(1.dp, if (value) Blue else AppBorder)
-                .background(if (value) Blue.copy(alpha = 0.12f) else Color.Transparent)
-                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .border(1.dp, if (value) LocalAppColors.current.blue else LocalAppColors.current.border)
+                .background(if (value) LocalAppColors.current.blue.copy(alpha = 0.12f) else Color.Transparent)
+                .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
-            Text(if (value) "ON" else "OFF", color = if (value) Blue else TextDisabled, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            Text(if (value) "ON" else "OFF", color = if (value) LocalAppColors.current.blue else LocalAppColors.current.textDisabled, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1069,26 +1122,26 @@ private fun ConfigToggleRow(label: String, value: Boolean, onToggle: () -> Unit)
 private fun ConfigDropdownRow(label: String, value: String, options: List<String>, onSelect: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
+        Text(label, color = LocalAppColors.current.textSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Box {
             Row(
                 modifier = Modifier
                     .clickable { expanded = true }
-                    .border(0.5.dp, AppBorder)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                    .border(0.5.dp, LocalAppColors.current.border)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(value, color = TextPrimary, fontSize = 8.sp)
-                Text("▾", color = TextSecondary, fontSize = 8.sp)
+                Text(value, color = LocalAppColors.current.textPrimary, fontSize = 11.sp)
+                Text("▾", color = LocalAppColors.current.textSecondary, fontSize = 10.sp)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(AppSurface)) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(LocalAppColors.current.surface)) {
                 options.forEachIndexed { idx, option ->
                     DropdownMenuItem(
-                        text = { Text(option, color = TextPrimary, fontSize = 9.sp) },
+                        text = { Text(option, color = LocalAppColors.current.textPrimary, fontSize = 11.sp) },
                         onClick = { onSelect(idx); expanded = false }
                     )
                 }
@@ -1100,10 +1153,10 @@ private fun ConfigDropdownRow(label: String, value: String, options: List<String
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().border(0.5.dp, AppBorder).padding(horizontal = 10.dp, vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = TextSecondary, fontSize = 8.sp, modifier = Modifier.weight(1f))
-        Text(value, color = TextPrimary, fontSize = 8.sp)
+        Text(label, color = LocalAppColors.current.textSecondary, fontSize = 10.sp, modifier = Modifier.weight(1f))
+        Text(value, color = LocalAppColors.current.textPrimary, fontSize = 10.sp)
     }
 }

@@ -20,7 +20,7 @@ interface SessionDao {
         "SELECT s.*, " +
         "COUNT(si.id) as imageCount, " +
         "COUNT(CASE WHEN si.uploadState = 'UPLOADED' THEN 1 END) as uploadedCount, " +
-        "COUNT(CASE WHEN si.uploadState = 'FAILED' OR si.uploadState = 'RETRY_REQUIRED' THEN 1 END) as failedCount " +
+        "COUNT(CASE WHEN si.uploadState = 'FAILED' THEN 1 END) as failedCount " +
         "FROM (SELECT * FROM sessions ORDER BY startTime DESC LIMIT :limit) s " +
         "LEFT JOIN session_images si ON si.sessionId = s.id " +
         "GROUP BY s.id ORDER BY s.startTime DESC"

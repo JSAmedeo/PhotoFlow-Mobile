@@ -4,9 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class ConnectionType(val label: String, val badge: String) {
-    FTP("FTP Server", "FTP"),
-    API_HOOK("API Hook", "API"),
-    CLOUD("Cloud Storage", "CLD")
+    FTP("FTP Server", "FTP")
 }
 
 @Entity(tableName = "connection_profiles")

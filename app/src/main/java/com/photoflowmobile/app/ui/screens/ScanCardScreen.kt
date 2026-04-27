@@ -53,7 +53,7 @@ fun ScanCardScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(LocalAppColors.current.background)
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         ScanTopBar()
@@ -70,10 +70,10 @@ fun ScanCardScreen(
                     }
                 }
             )
-            Box(modifier = Modifier.fillMaxSize().border(1.dp, DarkBorder))
+            Box(modifier = Modifier.fillMaxSize().border(1.dp, LocalAppColors.current.border))
             Text(
                 "SCAN CARD",
-                color = DarkPrimary.copy(alpha = 0.5f),
+                color = LocalAppColors.current.blue.copy(alpha = 0.5f),
                 fontSize = 8.sp,
                 letterSpacing = 1.sp,
                 modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
@@ -81,7 +81,7 @@ fun ScanCardScreen(
             ScanReticle(modifier = Modifier.align(Alignment.Center))
             Text(
                 "AIM AT CARD BARCODE",
-                color = DarkOnBackground.copy(alpha = 0.5f),
+                color = LocalAppColors.current.textPrimary.copy(alpha = 0.5f),
                 fontSize = 9.sp,
                 letterSpacing = 1.sp,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp)
@@ -177,7 +177,7 @@ private fun BarcodeScanPreview(
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text(
                 "CAMERA PERMISSION REQUIRED",
-                color = DarkOnBackground.copy(alpha = 0.4f),
+                color = LocalAppColors.current.textPrimary.copy(alpha = 0.4f),
                 fontSize = 8.sp,
                 letterSpacing = 0.5.sp
             )
@@ -190,15 +190,15 @@ private fun ScanTopBar() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DarkSurface)
+            .background(LocalAppColors.current.surface)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("⊞", color = DarkPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text("⊞", color = LocalAppColors.current.blue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(5.dp))
         Text(
             "PHOTOFLOW — MOBILE",
-            color = DarkPrimary,
+            color = LocalAppColors.current.blue,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp
@@ -206,22 +206,23 @@ private fun ScanTopBar() {
         Spacer(Modifier.width(5.dp))
         Text(
             "· SCAN CARD",
-            color = DarkOnBackground.copy(alpha = 0.45f),
+            color = LocalAppColors.current.textPrimary.copy(alpha = 0.45f),
             fontSize = 10.sp
         )
         Spacer(Modifier.weight(1f))
         Icon(
             Icons.Default.Menu,
             contentDescription = null,
-            tint = DarkOnBackground.copy(alpha = 0.5f),
+            tint = LocalAppColors.current.textPrimary.copy(alpha = 0.5f),
             modifier = Modifier.size(16.dp)
         )
     }
-    HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
 }
 
 @Composable
 private fun ScanReticle(modifier: Modifier = Modifier) {
+    val reticleColor = LocalAppColors.current.blue
     Canvas(modifier = modifier.size(200.dp)) {
         val stroke = 2.dp.toPx()
         val corner = 28.dp.toPx()
@@ -238,7 +239,7 @@ private fun ScanReticle(modifier: Modifier = Modifier) {
             Offset(w, h) to Offset(w - corner, h),
         )
         segments.forEach { (start, end) ->
-            drawLine(DarkPrimary, start, end, strokeWidth = stroke)
+            drawLine(reticleColor, start, end, strokeWidth = stroke)
         }
     }
 }
@@ -249,18 +250,18 @@ private fun ManualEntryBar(
     onValueChange: (String) -> Unit,
     onSubmit: () -> Unit
 ) {
-    HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DarkSurface)
+            .background(LocalAppColors.current.surface)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             "MANUAL ENTRY",
-            color = DarkOnBackground.copy(alpha = 0.45f),
+            color = LocalAppColors.current.textPrimary.copy(alpha = 0.45f),
             fontSize = 8.sp,
             letterSpacing = 0.5.sp
         )
@@ -268,22 +269,22 @@ private fun ManualEntryBar(
             modifier = Modifier
                 .weight(1f)
                 .background(Color(0xFF111111))
-                .border(0.5.dp, DarkBorder)
+                .border(0.5.dp, LocalAppColors.current.border)
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             if (value.isEmpty()) {
                 Text(
                     "Enter session code...",
-                    color = DarkOnBackground.copy(alpha = 0.25f),
+                    color = LocalAppColors.current.textPrimary.copy(alpha = 0.25f),
                     fontSize = 9.sp
                 )
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                textStyle = TextStyle(color = DarkOnBackground, fontSize = 9.sp),
-                cursorBrush = SolidColor(DarkPrimary),
+                textStyle = TextStyle(color = LocalAppColors.current.textPrimary, fontSize = 9.sp),
+                cursorBrush = SolidColor(LocalAppColors.current.blue),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Characters,
@@ -295,14 +296,14 @@ private fun ManualEntryBar(
         }
         Box(
             modifier = Modifier
-                .background(if (value.isNotBlank()) DarkPrimary else DarkSurfaceVariant)
-                .border(1.dp, if (value.isNotBlank()) DarkPrimary else DarkBorder)
+                .background(if (value.isNotBlank()) LocalAppColors.current.blue else LocalAppColors.current.surfaceRaised)
+                .border(1.dp, if (value.isNotBlank()) LocalAppColors.current.blue else LocalAppColors.current.border)
                 .clickable(enabled = value.isNotBlank()) { onSubmit() }
                 .padding(horizontal = 14.dp, vertical = 5.dp)
         ) {
             Text(
                 "GO",
-                color = if (value.isNotBlank()) DarkBackground else DarkOnBackground.copy(alpha = 0.3f),
+                color = if (value.isNotBlank()) LocalAppColors.current.background else LocalAppColors.current.textPrimary.copy(alpha = 0.3f),
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp

@@ -27,7 +27,7 @@ class SessionRepository(
     fun getTransferQueue(): Flow<List<SessionImage>> = sessionImageDao.getTransferQueue()
 
     fun getPendingUploads(): Flow<List<SessionImage>> =
-        sessionImageDao.getImagesByState(listOf(UploadState.PENDING, UploadState.RETRY_REQUIRED))
+        sessionImageDao.getImagesByState(listOf(UploadState.PENDING))
 
     fun getFailedImages(): Flow<List<SessionImage>> = sessionImageDao.getFailedImages()
 

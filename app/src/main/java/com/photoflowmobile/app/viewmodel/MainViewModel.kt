@@ -21,6 +21,8 @@ import com.photoflowmobile.app.data.datastore.settingsDataStore
 import com.photoflowmobile.app.data.db.SessionWithCount
 import com.photoflowmobile.app.data.model.ConnectionProfile
 import com.photoflowmobile.app.data.model.DeviceMode
+import com.photoflowmobile.app.data.model.OrientationLock
+import com.photoflowmobile.app.data.usb.TetheredState
 import com.photoflowmobile.app.data.model.Session
 import com.photoflowmobile.app.data.model.SessionImage
 import com.photoflowmobile.app.data.model.UploadState
@@ -88,6 +90,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .map { appSettingsFromPreferences(it).deviceMode }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DeviceMode.TETHERED_DSLR)
 
+    val orientationLockEnabled: StateFlow<Boolean> = dataStore.data
+        .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+        .map { appSettingsFromPreferences(it).orientationLockEnabled }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val orientationLock: StateFlow<OrientationLock> = dataStore.data
+        .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+        .map { appSettingsFromPreferences(it).orientationLock }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OrientationLock.LANDSCAPE)
+
+    val darkMode: StateFlow<Boolean> = dataStore.data
+        .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+        .map { appSettingsFromPreferences(it).darkMode }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    val loggingEnabled: StateFlow<Boolean> = dataStore.data
+        .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+        .map { appSettingsFromPreferences(it).loggingEnabled }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    private fun pipelineLog(msg: String) { if (loggingEnabled.value) Log.i(PIPELINE_TAG, msg) }
+
     // ── Session state ─────────────────────────────────────────────────────────
 
     val activeSession: StateFlow<Session?> = repository.getAllSessions()
@@ -151,33 +175,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerTetheredCapture()               { /* MTP does not support remote shutter */ }
 
     private suspend fun handleTetheredImage(cameraFilename: String, data: ByteArray) {
-        val t0 = System.currentTimeMillis()
         val context = getApplication<Application>()
-        Log.i(PIPELINE_TAG, "received: camera='$cameraFilename' size=${data.size}B")
+        pipelineLog("[IMAGE] detected: $cameraFilename (${data.size / 1024}KB)")
 
         val session = selectedSession.value
         if (session == null) {
-            Log.w(PIPELINE_TAG, "drop: no active session for '$cameraFilename'")
+            Log.w(PIPELINE_TAG, "[IMAGE] dropped — no active session")
             return
         }
 
         val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
         val existingCount = repository.getImagesForSession(session.id).first().size
         val renamedFilename = buildFilename(settings, session.barcode, existingCount + 1)
-        Log.d(PIPELINE_TAG, "rename: '$cameraFilename' -> '$renamedFilename' " +
-                "(session=${session.id} barcode='${session.barcode}' seq=${existingCount + 1})")
+        pipelineLog("[IMAGE] renamed: $cameraFilename → $renamedFilename")
 
         val outputDir  = File(context.filesDir, "captures").also { it.mkdirs() }
         val outputFile = File(outputDir, renamedFilename)
-        val tWrite = System.currentTimeMillis()
         try {
             outputFile.writeBytes(data)
         } catch (e: Exception) {
-            Log.e(PIPELINE_TAG, "save FAILED: ${outputFile.absolutePath}", e)
+            Log.e(PIPELINE_TAG, "[IMAGE] save failed: $renamedFilename", e)
             return
         }
-        Log.d(PIPELINE_TAG, "saved: ${outputFile.absolutePath} " +
-                "(${data.size}B in ${System.currentTimeMillis() - tWrite}ms)")
         saveBackupIfEnabled(renamedFilename, outputFile)
 
         val imageId = try {
@@ -191,9 +210,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         } catch (e: Exception) {
-            Log.e(PIPELINE_TAG, "db insert FAILED for '$renamedFilename'", e); return
+            Log.e(PIPELINE_TAG, "[IMAGE] db insert failed: $renamedFilename", e); return
         }
-        Log.d(PIPELINE_TAG, "db inserted: imageId=$imageId state=PENDING")
 
         try {
             WorkManager.getInstance(context).enqueueUniqueWork(
@@ -203,13 +221,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
                     .build()
             )
-            Log.d(PIPELINE_TAG, "enqueued: ftp_upload_$imageId")
+            pipelineLog("[UPLOAD] queued: $renamedFilename (id=$imageId)")
         } catch (e: Exception) {
-            Log.e(PIPELINE_TAG, "enqueue FAILED for imageId=$imageId", e)
+            Log.e(PIPELINE_TAG, "[UPLOAD] enqueue failed: $renamedFilename id=$imageId", e)
         }
-
-        Log.i(PIPELINE_TAG, "complete: '$renamedFilename' imageId=$imageId " +
-                "(total ${System.currentTimeMillis() - t0}ms)")
     }
 
     private fun runBackupCleanupIfEnabled() {
@@ -225,7 +240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val deleted = context.contentResolver.delete(
                         MediaStore.Images.Media.EXTERNAL_CONTENT_URI, selection, selectionArgs
                     )
-                    Log.d(PIPELINE_TAG, "backup cleanup: deleted $deleted file(s) older than ${settings.autoDeleteAfterDays}d")
+                    pipelineLog("backup cleanup: deleted $deleted file(s) older than ${settings.autoDeleteAfterDays}d")
                 } else {
                     @Suppress("DEPRECATION")
                     val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "PhotoFlow")
@@ -238,7 +253,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 deleted++
                             }
                         }
-                        Log.d(PIPELINE_TAG, "backup cleanup: deleted $deleted file(s) older than ${settings.autoDeleteAfterDays}d")
+                        pipelineLog("backup cleanup: deleted $deleted file(s) older than ${settings.autoDeleteAfterDays}d")
                     }
                 }
             } catch (e: Exception) {
@@ -267,7 +282,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sourceFile.copyTo(File(dir, filename), overwrite = true)
                 android.media.MediaScannerConnection.scanFile(context, arrayOf(File(dir, filename).absolutePath), null, null)
             }
-            Log.d(PIPELINE_TAG, "backup saved: $filename")
+            pipelineLog("backup saved: $filename")
         } catch (e: Exception) {
             Log.e(PIPELINE_TAG, "backup failed: $filename", e)
         }
@@ -298,7 +313,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to image.id))
                                     .build()
                             )
-                            Log.d(PIPELINE_TAG, "auto-retry: imageId=${image.id} attempt=${image.retryCount + 1}")
+                            pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
                         }
                     }
                     delay(settings.autoRetryIntervalSeconds * 1_000L)
@@ -312,13 +327,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── Init: startup recovery ────────────────────────────────────────────────
 
     init {
+        // App launched
+        viewModelScope.launch {
+            dataStore.data
+                .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+                .first().let { if (appSettingsFromPreferences(it).loggingEnabled) Log.i(PIPELINE_TAG, "[APP] launched") }
+        }
+
+        // Active connection loaded
+        viewModelScope.launch {
+            activeConnection.collect { profile ->
+                if (profile != null)
+                    pipelineLog("[CONFIG] connection loaded: \"${profile.name}\" (${profile.host}:${profile.port})")
+            }
+        }
+
+        // Camera connection changed
+        viewModelScope.launch {
+            tetheredStatus.collect { status ->
+                pipelineLog(when (status.state) {
+                    TetheredState.DISCONNECTED -> "[CAMERA] disconnected"
+                    TetheredState.CONNECTING   -> "[CAMERA] connecting"
+                    TetheredState.CONNECTED    -> "[CAMERA] connected: ${status.cameraModel ?: "unknown model"}"
+                    TetheredState.ERROR        -> "[CAMERA] error: ${status.message ?: "unknown"}"
+                })
+            }
+        }
+
+        // Session started / completed
         var prevActiveId: Long? = null
+        var prevActiveSession: Session? = null
         viewModelScope.launch {
             activeSession.collect { session ->
                 if (session?.id != prevActiveId && prevActiveId != null) {
                     _overrideSessionId.value = null
                 }
+                if (session != null && prevActiveSession == null)
+                    pipelineLog("[SESSION] started: barcode=${session.barcode}")
+                else if (session == null && prevActiveSession != null)
+                    pipelineLog("[SESSION] completed: barcode=${prevActiveSession!!.barcode}")
                 prevActiveId = session?.id
+                prevActiveSession = session
             }
         }
 

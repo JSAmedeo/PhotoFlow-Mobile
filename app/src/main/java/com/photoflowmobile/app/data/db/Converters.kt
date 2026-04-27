@@ -9,11 +9,13 @@ class Converters {
     fun fromUploadState(state: UploadState): String = state.name
 
     @TypeConverter
-    fun toUploadState(value: String): UploadState = UploadState.valueOf(value)
+    fun toUploadState(value: String): UploadState =
+        UploadState.entries.firstOrNull { it.name == value } ?: UploadState.FAILED
 
     @TypeConverter
     fun fromConnectionType(type: ConnectionType): String = type.name
 
     @TypeConverter
-    fun toConnectionType(value: String): ConnectionType = ConnectionType.valueOf(value)
+    fun toConnectionType(value: String): ConnectionType =
+        ConnectionType.entries.firstOrNull { it.name == value } ?: ConnectionType.FTP
 }

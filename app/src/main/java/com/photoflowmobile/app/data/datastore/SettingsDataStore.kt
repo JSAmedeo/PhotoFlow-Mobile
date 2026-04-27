@@ -10,14 +10,11 @@ val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(na
 
 object SettingsKeys {
     val DEVICE_MODE               = stringPreferencesKey("device_mode")
-    val AUTO_RECONNECT            = booleanPreferencesKey("auto_reconnect")
-    val PREVIEW_QUALITY           = stringPreferencesKey("preview_quality")
-    val SESSION_TIMEOUT           = stringPreferencesKey("session_timeout")
+    val DARK_MODE                 = booleanPreferencesKey("dark_mode")
     val NAMING_FIELDS             = stringPreferencesKey("naming_fields")
     val NAMING_SEPARATOR          = stringPreferencesKey("naming_separator")
     val NAMING_EXTENSION          = stringPreferencesKey("naming_extension")
-    val VERBOSE_LOGGING           = booleanPreferencesKey("verbose_logging")
-    val SAVE_CRASH_REPORTS        = booleanPreferencesKey("save_crash_reports")
+    val LOGGING_ENABLED           = booleanPreferencesKey("logging_enabled")
     val AUTO_RETRY_ENABLED        = booleanPreferencesKey("auto_retry_enabled")
     val AUTO_RETRY_INTERVAL_SECS  = intPreferencesKey("auto_retry_interval_secs")
     val AUTO_RETRY_MAX_COUNT      = intPreferencesKey("auto_retry_max_count")
@@ -25,40 +22,37 @@ object SettingsKeys {
     val SAVE_BACKUP_TO_PHONE      = booleanPreferencesKey("save_backup_to_phone")
     val AUTO_DELETE_BACKUPS       = booleanPreferencesKey("auto_delete_backups")
     val AUTO_DELETE_AFTER_DAYS    = intPreferencesKey("auto_delete_after_days")
+    val ORIENTATION_LOCK_ENABLED  = booleanPreferencesKey("orientation_lock_enabled")
+    val ORIENTATION_LOCK          = stringPreferencesKey("orientation_lock")
 }
 
 fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     deviceMode             = DeviceMode.entries.firstOrNull { it.name == prefs[SettingsKeys.DEVICE_MODE] }
                                  ?: DeviceMode.TETHERED_DSLR,
-    autoReconnect          = prefs[SettingsKeys.AUTO_RECONNECT]   ?: true,
-    previewQuality         = PreviewQuality.entries.firstOrNull { it.name == prefs[SettingsKeys.PREVIEW_QUALITY] }
-                                 ?: PreviewQuality.HIGH,
-    sessionTimeout         = SessionTimeout.entries.firstOrNull { it.name == prefs[SettingsKeys.SESSION_TIMEOUT] }
-                                 ?: SessionTimeout.MIN_60,
+    darkMode               = prefs[SettingsKeys.DARK_MODE] ?: true,
     namingFields           = deserializeNamingFields(prefs[SettingsKeys.NAMING_FIELDS] ?: ""),
     namingSeparator        = prefs[SettingsKeys.NAMING_SEPARATOR] ?: "_",
     namingExtension        = prefs[SettingsKeys.NAMING_EXTENSION] ?: "JPG",
-    verboseLogging         = prefs[SettingsKeys.VERBOSE_LOGGING]  ?: false,
-    saveCrashReports       = prefs[SettingsKeys.SAVE_CRASH_REPORTS] ?: true,
+    loggingEnabled         = prefs[SettingsKeys.LOGGING_ENABLED] ?: true,
     autoRetryEnabled       = prefs[SettingsKeys.AUTO_RETRY_ENABLED]       ?: true,
     autoRetryIntervalSeconds = prefs[SettingsKeys.AUTO_RETRY_INTERVAL_SECS] ?: 4,
     autoRetryMaxCount      = prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     ?: -1,
     sessionHistoryMax      = prefs[SettingsKeys.SESSION_HISTORY_MAX]      ?: 50,
     saveBackupToPhone      = prefs[SettingsKeys.SAVE_BACKUP_TO_PHONE]     ?: false,
     autoDeleteBackups      = prefs[SettingsKeys.AUTO_DELETE_BACKUPS]      ?: false,
-    autoDeleteAfterDays    = prefs[SettingsKeys.AUTO_DELETE_AFTER_DAYS]   ?: 30
+    autoDeleteAfterDays    = prefs[SettingsKeys.AUTO_DELETE_AFTER_DAYS]   ?: 30,
+    orientationLockEnabled = prefs[SettingsKeys.ORIENTATION_LOCK_ENABLED] ?: false,
+    orientationLock        = OrientationLock.entries.firstOrNull { it.name == prefs[SettingsKeys.ORIENTATION_LOCK] }
+                                 ?: OrientationLock.LANDSCAPE
 )
 
 fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.DEVICE_MODE]              = deviceMode.name
-    prefs[SettingsKeys.AUTO_RECONNECT]           = autoReconnect
-    prefs[SettingsKeys.PREVIEW_QUALITY]          = previewQuality.name
-    prefs[SettingsKeys.SESSION_TIMEOUT]          = sessionTimeout.name
+    prefs[SettingsKeys.DARK_MODE]                = darkMode
     prefs[SettingsKeys.NAMING_FIELDS]            = serializeNamingFields(namingFields)
     prefs[SettingsKeys.NAMING_SEPARATOR]         = namingSeparator
     prefs[SettingsKeys.NAMING_EXTENSION]         = namingExtension
-    prefs[SettingsKeys.VERBOSE_LOGGING]          = verboseLogging
-    prefs[SettingsKeys.SAVE_CRASH_REPORTS]       = saveCrashReports
+    prefs[SettingsKeys.LOGGING_ENABLED]          = loggingEnabled
     prefs[SettingsKeys.AUTO_RETRY_ENABLED]       = autoRetryEnabled
     prefs[SettingsKeys.AUTO_RETRY_INTERVAL_SECS] = autoRetryIntervalSeconds
     prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     = autoRetryMaxCount
@@ -66,4 +60,6 @@ fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.SAVE_BACKUP_TO_PHONE]     = saveBackupToPhone
     prefs[SettingsKeys.AUTO_DELETE_BACKUPS]      = autoDeleteBackups
     prefs[SettingsKeys.AUTO_DELETE_AFTER_DAYS]   = autoDeleteAfterDays
+    prefs[SettingsKeys.ORIENTATION_LOCK_ENABLED] = orientationLockEnabled
+    prefs[SettingsKeys.ORIENTATION_LOCK]         = orientationLock.name
 }

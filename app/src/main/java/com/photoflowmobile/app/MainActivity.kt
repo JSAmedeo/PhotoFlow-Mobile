@@ -12,6 +12,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.photoflowmobile.app.navigation.PhotoFlowNavGraph
 import com.photoflowmobile.app.ui.theme.PhotoFlowMobileTheme
 import com.photoflowmobile.app.viewmodel.MainViewModel
@@ -50,7 +54,14 @@ class MainActivity : ComponentActivity() {
         handleUsbIntent(intent)
 
         setContent {
-            PhotoFlowMobileTheme {
+            val darkMode by mainViewModel.darkMode.collectAsStateWithLifecycle()
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !darkMode
+                    isAppearanceLightNavigationBars = !darkMode
+                }
+            }
+            PhotoFlowMobileTheme(darkMode = darkMode) {
                 PhotoFlowNavGraph()
             }
         }

@@ -2,12 +2,13 @@ package com.photoflowmobile.app.data.model
 
 enum class DeviceMode { TETHERED_DSLR, NATIVE_CAMERA }
 
-enum class PreviewQuality(val label: String) {
-    LOW("Low"), MEDIUM("Medium"), HIGH("High")
-}
 
-enum class SessionTimeout(val label: String) {
-    MIN_30("30 min"), MIN_60("60 min"), MIN_120("120 min"), NEVER("Never")
+
+enum class OrientationLock(val label: String) {
+    LANDSCAPE("Landscape"),
+    LANDSCAPE_180("Landscape 180"),
+    PORTRAIT("Portrait"),
+    PORTRAIT_180("Portrait 180")
 }
 
 enum class FieldType(val label: String) {
@@ -18,21 +19,20 @@ data class NamingField(val type: FieldType, val customValue: String = "")
 
 data class AppSettings(
     val deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
-    val autoReconnect: Boolean = true,
-    val previewQuality: PreviewQuality = PreviewQuality.HIGH,
-    val sessionTimeout: SessionTimeout = SessionTimeout.MIN_60,
+    val darkMode: Boolean = true,
     val namingFields: List<NamingField> = defaultNamingFields(),
     val namingSeparator: String = "_",
     val namingExtension: String = "JPG",
-    val verboseLogging: Boolean = false,
-    val saveCrashReports: Boolean = true,
+    val loggingEnabled: Boolean = true,
     val autoRetryEnabled: Boolean = true,
     val autoRetryIntervalSeconds: Int = 4,
     val autoRetryMaxCount: Int = -1,  // -1 = continuous
     val sessionHistoryMax: Int = 50,  // -1 = unlimited
     val saveBackupToPhone: Boolean = false,
     val autoDeleteBackups: Boolean = false,
-    val autoDeleteAfterDays: Int = 30
+    val autoDeleteAfterDays: Int = 30,
+    val orientationLockEnabled: Boolean = false,
+    val orientationLock: OrientationLock = OrientationLock.LANDSCAPE
 )
 
 fun defaultNamingFields(): List<NamingField> = listOf(

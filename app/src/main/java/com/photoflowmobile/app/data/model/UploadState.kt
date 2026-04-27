@@ -4,6 +4,5 @@ enum class UploadState {
     PENDING,
     UPLOADING,
     UPLOADED,
-    FAILED,
-    RETRY_REQUIRED
+    FAILED
 }

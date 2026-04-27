@@ -16,6 +16,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -23,6 +24,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -48,6 +50,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -90,12 +96,29 @@ fun MainScreen(
     val connectionProfiles by viewModel.connectionProfiles.collectAsStateWithLifecycle()
     val activeConnection by viewModel.activeConnection.collectAsStateWithLifecycle()
     val tetheredStatus by viewModel.tetheredStatus.collectAsStateWithLifecycle()
+    val orientationLockEnabled by viewModel.orientationLockEnabled.collectAsStateWithLifecycle()
+    val orientationLock by viewModel.orientationLock.collectAsStateWithLifecycle()
+
+    LaunchedEffect(orientationLockEnabled, orientationLock) {
+        activity.requestedOrientation = if (!orientationLockEnabled) {
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        } else when (orientationLock) {
+            com.photoflowmobile.app.data.model.OrientationLock.LANDSCAPE     -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            com.photoflowmobile.app.data.model.OrientationLock.LANDSCAPE_180 -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            com.photoflowmobile.app.data.model.OrientationLock.PORTRAIT      -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            com.photoflowmobile.app.data.model.OrientationLock.PORTRAIT_180  -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+        }
+    }
     val selectedSession by viewModel.selectedSession.collectAsStateWithLifecycle()
+
+    val configuration = LocalConfiguration.current
+    val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+    var showSessionHistory by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(LocalAppColors.current.background)
             .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         TopBar(
@@ -103,41 +126,77 @@ fun MainScreen(
             transferQueue = transferQueue,
             onRetry = { viewModel.forceRetry(it) }
         )
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            LeftPanel(
-                modifier = Modifier.width(115.dp).fillMaxHeight(),
+        if (isPortrait) {
+            PortraitSessionButtons(
                 onNewSession = onNewSession,
-                sessionImages = sessionImages,
-                selectedImageId = reviewImage?.id,
-                onImageSelected = { viewModel.selectReviewImage(it) }
+                onShowHistory = { showSessionHistory = true }
             )
-            CenterPanel(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+            PortraitCenterArea(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 deviceMode = deviceMode,
                 imageCapture = viewModel.imageCapture,
                 latestImage = reviewImage,
                 tetheredStatus = tetheredStatus,
-                onRemoteTrigger = { viewModel.triggerTetheredCapture() },
                 onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
             )
-            RightPanel(
-                modifier = Modifier.width(99.dp).fillMaxHeight(),
-                sessions = recentSessions,
-                selectedSessionId = selectedSessionId,
-                onSessionSelected = { viewModel.selectSession(it) }
+            PortraitThumbnailRail(
+                sessionImages = sessionImages,
+                selectedImageId = reviewImage?.id,
+                onImageSelected = { viewModel.selectReviewImage(it) }
+            )
+            PortraitBottomBar(
+                deviceMode = deviceMode,
+                activeSession = selectedSession ?: activeSession,
+                connectionProfiles = connectionProfiles,
+                activeConnection = activeConnection,
+                onConnectionSelected = { viewModel.setActiveConnection(it) }
+            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                LeftPanel(
+                    modifier = Modifier.width(115.dp).fillMaxHeight(),
+                    onNewSession = onNewSession,
+                    sessionImages = sessionImages,
+                    selectedImageId = reviewImage?.id,
+                    onImageSelected = { viewModel.selectReviewImage(it) }
+                )
+                CenterPanel(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    deviceMode = deviceMode,
+                    imageCapture = viewModel.imageCapture,
+                    latestImage = reviewImage,
+                    tetheredStatus = tetheredStatus,
+                    onRemoteTrigger = { viewModel.triggerTetheredCapture() },
+                    onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
+                )
+                RightPanel(
+                    modifier = Modifier.width(99.dp).fillMaxHeight(),
+                    sessions = recentSessions,
+                    selectedSessionId = selectedSessionId,
+                    onSessionSelected = { viewModel.selectSession(it) }
+                )
+            }
+            BottomBar(
+                deviceMode = deviceMode,
+                activeSession = selectedSession ?: activeSession,
+                connectionProfiles = connectionProfiles,
+                activeConnection = activeConnection,
+                onConnectionSelected = { viewModel.setActiveConnection(it) }
             )
         }
-        BottomBar(
-            deviceMode = deviceMode,
-            activeSession = selectedSession ?: activeSession,
-            connectionProfiles = connectionProfiles,
-            activeConnection = activeConnection,
-            onConnectionSelected = { viewModel.setActiveConnection(it) }
+    }
+
+    if (isPortrait && showSessionHistory) {
+        SessionHistorySheet(
+            sessions = recentSessions,
+            selectedSessionId = selectedSessionId,
+            onSessionSelected = { viewModel.selectSession(it) },
+            onDismiss = { showSessionHistory = false }
         )
     }
 }
@@ -153,7 +212,7 @@ private fun TopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DarkSurface)
+            .background(LocalAppColors.current.surface)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -167,14 +226,14 @@ private fun TopBar(
         Row {
             Text(
                 "PHOTOFLOW",
-                color = TextPrimary,
+                color = LocalAppColors.current.textPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp
             )
             Text(
                 " MOBILE",
-                color = Blue,
+                color = LocalAppColors.current.blue,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp
@@ -188,11 +247,11 @@ private fun TopBar(
         Icon(
             Icons.Default.Menu,
             contentDescription = null,
-            tint = TextSecondary,
+            tint = LocalAppColors.current.textSecondary,
             modifier = Modifier.size(16.dp).clickable { onMenuClick() }
         )
     }
-    HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
 }
 
 @Composable
@@ -244,10 +303,10 @@ private fun WifiSsidChip() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        StatusDot(color = if (isConnected) Green else Warning)
+        StatusDot(color = if (isConnected) LocalAppColors.current.green else LocalAppColors.current.warning)
         Text(
             label,
-            color = if (isConnected) Green else Warning,
+            color = if (isConnected) LocalAppColors.current.green else LocalAppColors.current.warning,
             fontSize = 8.sp,
             fontWeight = FontWeight.Bold
         )
@@ -272,13 +331,13 @@ private fun LeftPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(36.dp)
-                .border(1.dp, AppBorder)
+                .border(1.dp, LocalAppColors.current.border)
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "+ NEW SESSION",
-                color = TextPrimary,
+                color = LocalAppColors.current.textPrimary,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp,
@@ -287,7 +346,7 @@ private fun LeftPanel(
         }
         Text(
             "SHOTS · ${sessionImages.size}",
-            color = TextDisabled,
+            color = LocalAppColors.current.textDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp
         )
@@ -321,10 +380,10 @@ private fun ThumbnailCell(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .background(DarkSurfaceVariant)
+                .background(LocalAppColors.current.surfaceRaised)
                 .border(
                     width = if (active) 1.dp else 0.5.dp,
-                    color = if (active) AppBorderActive else AppBorder
+                    color = if (active) LocalAppColors.current.borderActive else LocalAppColors.current.border
                 )
         ) {
             AsyncImage(
@@ -338,7 +397,7 @@ private fun ThumbnailCell(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(3.dp)
-                        .background(Green.copy(alpha = 0.90f))
+                        .background(LocalAppColors.current.green.copy(alpha = 0.90f))
                         .size(16.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -348,7 +407,7 @@ private fun ThumbnailCell(
         }
         Text(
             label,
-            color = if (active) TextPrimary else TextDisabled,
+            color = if (active) LocalAppColors.current.textPrimary else LocalAppColors.current.textDisabled,
             fontSize = 6.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -374,8 +433,8 @@ private fun CenterPanel(
 ) {
     Box(
         modifier = modifier
-            .background(Color(0xFF050F0F))
-            .border(1.dp, AppBorder)
+            .background(LocalAppColors.current.surface)
+            .border(1.dp, LocalAppColors.current.border)
             .clip(RectangleShape)
     ) {
         if (deviceMode == DeviceMode.TETHERED_DSLR) {
@@ -399,14 +458,15 @@ private fun CenterPanel(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        StatusDot(color = Green, size = 6.dp)
+                        StatusDot(color = LocalAppColors.current.green, size = 6.dp)
                         Text(
                             "LIVE",
-                            color = TextSecondary,
+                            color = LocalAppColors.current.textSecondary,
                             fontSize = 8.sp,
                             letterSpacing = 1.sp
                         )
                     }
+                    val canvasBorder = LocalAppColors.current.border
                     Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                         val stroke = 1.5.dp.toPx()
                         val corner = 14.dp.toPx()
@@ -422,12 +482,12 @@ private fun CenterPanel(
                             Offset(w, h - corner) to Offset(w, h),
                             Offset(w, h) to Offset(w - corner, h),
                         ).forEach { (start, end) ->
-                            drawLine(AppBorder.copy(alpha = 0.7f), start, end, strokeWidth = stroke)
+                            drawLine(canvasBorder.copy(alpha = 0.7f), start, end, strokeWidth = stroke)
                         }
                         // centre focus point
                         val fp = 9.dp.toPx()
                         drawRect(
-                            color = AppBorder.copy(alpha = 0.6f),
+                            color = canvasBorder.copy(alpha = 0.6f),
                             topLeft = Offset(w / 2f - fp, h / 2f - fp),
                             size = Size(fp * 2, fp * 2),
                             style = Stroke(width = stroke)
@@ -440,7 +500,7 @@ private fun CenterPanel(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(AppBorder)
+                        .background(LocalAppColors.current.border)
                 )
 
                 // ── Review pane + capture button (right ~42%) ────────
@@ -460,7 +520,7 @@ private fun CenterPanel(
                                 "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
                             else
                                 "REVIEW  ·  NO IMAGES",
-                            color = TextDisabled,
+                            color = LocalAppColors.current.textDisabled,
                             fontSize = 7.sp,
                             letterSpacing = 0.4.sp,
                             modifier = Modifier.padding(bottom = 4.dp)
@@ -469,8 +529,8 @@ private fun CenterPanel(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
-                                .border(1.dp, AppBorder)
-                                .background(Color(0xFF060E0E))
+                                .border(1.dp, LocalAppColors.current.border)
+                                .background(LocalAppColors.current.surfaceRaised)
                         ) {
                             if (latestImage != null) {
                                 AsyncImage(
@@ -482,7 +542,7 @@ private fun CenterPanel(
                             }
                         }
                     }
-                    HorizontalDivider(color = AppBorder, thickness = 1.dp)
+                    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -491,15 +551,15 @@ private fun CenterPanel(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, Blue)
-                                .background(Blue.copy(alpha = 0.10f))
+                                .border(1.dp, LocalAppColors.current.blue)
+                                .background(LocalAppColors.current.blue.copy(alpha = 0.10f))
                                 .clickable { onCapture() }
                                 .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 "◉  CAPTURE",
-                                color = Blue,
+                                color = LocalAppColors.current.blue,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.5.sp
@@ -531,6 +591,7 @@ private fun TetheredPanel(
         }
 
         // Corner bracket overlay
+        val canvasBorder = LocalAppColors.current.border
         Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
             val stroke = 1.5.dp.toPx()
             val corner = 14.dp.toPx()
@@ -540,7 +601,7 @@ private fun TetheredPanel(
                 Offset(w - corner, 0f) to Offset(w, 0f), Offset(w, 0f) to Offset(w, corner),
                 Offset(0f, h - corner) to Offset(0f, h), Offset(0f, h) to Offset(corner, h),
                 Offset(w, h - corner) to Offset(w, h), Offset(w, h) to Offset(w - corner, h),
-            ).forEach { (s, e) -> drawLine(AppBorder.copy(alpha = 0.6f), s, e, strokeWidth = stroke) }
+            ).forEach { (s, e) -> drawLine(canvasBorder.copy(alpha = 0.6f), s, e, strokeWidth = stroke) }
         }
 
         // Status row — top-left
@@ -550,14 +611,14 @@ private fun TetheredPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             val (label, color) = when (status.state) {
-                TetheredState.CONNECTED    -> "TETHERED"      to TextPrimary
-                TetheredState.CONNECTING   -> "CONNECTING…"   to Warning
-                TetheredState.ERROR        -> "ERROR"          to Warning
-                TetheredState.DISCONNECTED -> "NO CAMERA"      to TextDisabled
+                TetheredState.CONNECTED    -> "TETHERED"      to LocalAppColors.current.textPrimary
+                TetheredState.CONNECTING   -> "CONNECTING…"   to LocalAppColors.current.warning
+                TetheredState.ERROR        -> "ERROR"          to LocalAppColors.current.warning
+                TetheredState.DISCONNECTED -> "NO CAMERA"      to LocalAppColors.current.textDisabled
             }
             Text(label, color = color, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
             if (!status.cameraModel.isNullOrBlank()) {
-                Text("·  ${status.cameraModel}", color = DarkOnBackground.copy(alpha = 0.5f), fontSize = 7.sp)
+                Text("·  ${status.cameraModel}", color = LocalAppColors.current.textPrimary.copy(alpha = 0.5f), fontSize = 7.sp)
             }
         }
 
@@ -565,13 +626,13 @@ private fun TetheredPanel(
         if (status.state == TetheredState.CONNECTED && latestImage != null) {
             Text(
                 latestImage.filename,
-                color = TextSecondary,
+                color = LocalAppColors.current.textSecondary,
                 fontSize = 7.sp,
                 letterSpacing = 0.3.sp,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(6.dp)
-                    .background(DarkBackground.copy(alpha = 0.55f))
+                    .background(LocalAppColors.current.background.copy(alpha = 0.55f))
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             )
         }
@@ -590,14 +651,14 @@ private fun TetheredPanel(
                         TetheredState.ERROR        -> status.message?.ifBlank { "CONNECTION ERROR" } ?: "CONNECTION ERROR"
                         TetheredState.CONNECTED    -> "READY — WAITING FOR FIRST SHOT"
                     },
-                    color = DarkOnBackground.copy(alpha = 0.45f),
+                    color = LocalAppColors.current.textPrimary.copy(alpha = 0.45f),
                     fontSize = 9.sp,
                     letterSpacing = 0.8.sp
                 )
                 if (status.state == TetheredState.DISCONNECTED) {
                     Text(
                         "Camera: Menu → Communication Settings → USB Connection → PC Connection",
-                        color = DarkOnBackground.copy(alpha = 0.25f),
+                        color = LocalAppColors.current.textPrimary.copy(alpha = 0.25f),
                         fontSize = 7.sp,
                         letterSpacing = 0.3.sp
                     )
@@ -605,7 +666,7 @@ private fun TetheredPanel(
                 if (status.state == TetheredState.ERROR) {
                     Text(
                         "Check: USB Connection = PC Connection  ·  USB cable connected",
-                        color = DarkOnBackground.copy(alpha = 0.25f),
+                        color = LocalAppColors.current.textPrimary.copy(alpha = 0.25f),
                         fontSize = 7.sp,
                         letterSpacing = 0.3.sp
                     )
@@ -663,7 +724,7 @@ private fun CameraPreview(modifier: Modifier = Modifier, imageCapture: ImageCapt
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text(
                 "CAMERA PERMISSION REQUIRED",
-                color = DarkOnBackground.copy(alpha = 0.4f),
+                color = LocalAppColors.current.textPrimary.copy(alpha = 0.4f),
                 fontSize = 8.sp,
                 letterSpacing = 0.5.sp
             )
@@ -700,7 +761,7 @@ private fun SessionHistoryBlock(
     Column(modifier = modifier) {
         Text(
             "SESSION HISTORY",
-            color = TextDisabled,
+            color = LocalAppColors.current.textDisabled,
             fontSize = 7.sp,
             letterSpacing = 0.5.sp,
             modifier = Modifier.padding(bottom = 3.dp)
@@ -708,7 +769,7 @@ private fun SessionHistoryBlock(
         if (sessions.isEmpty()) {
             Text(
                 "— no sessions yet",
-                color = TextDisabled,
+                color = LocalAppColors.current.textDisabled,
                 fontSize = 7.sp
             )
         } else {
@@ -754,8 +815,8 @@ private fun SessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, if (isSelected) AppBorderActive else AppBorder)
-            .background(if (isSelected) AppSurfaceRaised else Color.Transparent)
+            .border(0.5.dp, if (isSelected) LocalAppColors.current.borderActive else LocalAppColors.current.border)
+            .background(if (isSelected) LocalAppColors.current.surfaceRaised else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 5.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -763,13 +824,13 @@ private fun SessionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 session.barcode,
-                color = TextPrimary,
+                color = LocalAppColors.current.textPrimary,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 relativeTimeLabel(session.startTime),
-                color = TextDisabled,
+                color = LocalAppColors.current.textDisabled,
                 fontSize = 7.sp
             )
         }
@@ -782,13 +843,13 @@ private fun SessionRow(
                 horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 if (allTransferred) {
-                    Text("✓", color = Green, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                    Text("✓", color = LocalAppColors.current.green, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                 } else if (anyFailed) {
-                    Text("✗", color = Warning, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                    Text("✗", color = LocalAppColors.current.warning, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
                     swc.imageCount.toString(),
-                    color = TextPrimary,
+                    color = LocalAppColors.current.textPrimary,
                     fontSize = 9.sp
                 )
             }
@@ -799,9 +860,9 @@ private fun SessionRow(
                     else       -> "OPEN"
                 },
                 color = when {
-                    isLive     -> Green
-                    isComplete -> Green
-                    else       -> TextSecondary
+                    isLive     -> LocalAppColors.current.green
+                    isComplete -> LocalAppColors.current.green
+                    else       -> LocalAppColors.current.textSecondary
                 },
                 fontSize = 7.sp
             )
@@ -819,11 +880,11 @@ private fun BottomBar(
     activeConnection: ConnectionProfile? = null,
     onConnectionSelected: (ConnectionProfile) -> Unit = {}
 ) {
-    HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DarkSurface)
+            .background(LocalAppColors.current.surface)
             .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -839,13 +900,13 @@ private fun BottomBar(
         ) {
             Text(
                 "Active Session",
-                color = TextDisabled,
+                color = LocalAppColors.current.textDisabled,
                 fontSize = 10.sp,
                 letterSpacing = 0.3.sp
             )
             Text(
                 activeSession?.barcode ?: "—",
-                color = TextPrimary,
+                color = LocalAppColors.current.textPrimary,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.ExtraBold,
                 letterSpacing = 2.sp
@@ -855,7 +916,7 @@ private fun BottomBar(
         Chip(
             label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered Mode" else "Native Mode",
             active = true,
-            color = TextSecondary
+            color = LocalAppColors.current.textSecondary
         )
     }
 }
@@ -871,13 +932,13 @@ private fun ConnectionSelector(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("ACTIVE CONNECTION", color = TextDisabled, fontSize = 8.sp, letterSpacing = 0.3.sp)
-        StatusDot(color = Green, size = 5.dp)
+        Text("ACTIVE CONNECTION", color = LocalAppColors.current.textDisabled, fontSize = 8.sp, letterSpacing = 0.3.sp)
+        StatusDot(color = LocalAppColors.current.green, size = 5.dp)
         Box {
             Row(
                 modifier = Modifier
-                    .border(1.dp, AppBorder)
-                    .background(AppSurfaceRaised)
+                    .border(1.dp, LocalAppColors.current.border)
+                    .background(LocalAppColors.current.surfaceRaised)
                     .clickable { expanded = true }
                     .padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -885,23 +946,23 @@ private fun ConnectionSelector(
             ) {
                 Text(
                     activeProfile?.name ?: "None",
-                    color = if (activeProfile != null) TextPrimary else TextDisabled,
+                    color = if (activeProfile != null) LocalAppColors.current.textPrimary else LocalAppColors.current.textDisabled,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text("▾", color = TextSecondary, fontSize = 9.sp)
+                Text("▾", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
             }
             DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.background(DarkSurface).border(0.5.dp, DarkBorder)
+            modifier = Modifier.background(LocalAppColors.current.surface).border(0.5.dp, LocalAppColors.current.border)
         ) {
             if (profiles.isEmpty()) {
                 DropdownMenuItem(
                     text = {
                         Text(
                             "No connections configured\nAdd one in Settings →",
-                            color = DarkOnBackground.copy(alpha = 0.45f),
+                            color = LocalAppColors.current.textPrimary.copy(alpha = 0.45f),
                             fontSize = 8.sp,
                             lineHeight = 12.sp
                         )
@@ -915,20 +976,20 @@ private fun ConnectionSelector(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     if (profile.isActive) "● " else "  ",
-                                    color = if (profile.isActive) Green else TextSecondary,
+                                    color = if (profile.isActive) LocalAppColors.current.green else LocalAppColors.current.textSecondary,
                                     fontSize = 8.sp
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Column {
                                     Text(
                                         profile.name,
-                                        color = TextPrimary,
+                                        color = LocalAppColors.current.textPrimary,
                                         fontSize = 9.sp,
                                         fontWeight = if (profile.isActive) FontWeight.Bold else FontWeight.Normal
                                     )
                                     Text(
                                         "${profile.host}:${profile.port}",
-                                        color = TextDisabled,
+                                        color = LocalAppColors.current.textDisabled,
                                         fontSize = 7.sp
                                     )
                                 }
@@ -936,7 +997,7 @@ private fun ConnectionSelector(
                         },
                         onClick = { onSelected(profile); expanded = false },
                         modifier = Modifier.background(
-                            if (profile.isActive) AppSurfaceRaised else Color.Transparent
+                            if (profile.isActive) LocalAppColors.current.surfaceRaised else Color.Transparent
                         )
                     )
                 }
@@ -953,22 +1014,22 @@ private fun FileTransfersButton(
 ) {
     var showPanel by remember { mutableStateOf(false) }
     val hasErrors = transferQueue.any {
-        it.uploadState == UploadState.FAILED || it.uploadState == UploadState.RETRY_REQUIRED
+        it.uploadState == UploadState.FAILED
     }
 
     Row(
         modifier = Modifier
-            .border(1.dp, AppBorder)
-            .background(AppSurfaceRaised)
+            .border(1.dp, LocalAppColors.current.border)
+            .background(LocalAppColors.current.surfaceRaised)
             .clickable { showPanel = true }
             .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (hasErrors) {
-            StatusDot(color = Warning)
+            StatusDot(color = LocalAppColors.current.warning)
         }
-        Text("File Transfers", color = TextPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        Text("File Transfers", color = LocalAppColors.current.textPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
     }
 
     if (showPanel) {
@@ -980,8 +1041,8 @@ private fun FileTransfersButton(
                 modifier = Modifier
                     .fillMaxWidth(0.72f)
                     .fillMaxHeight(0.68f)
-                    .background(DarkSurface)
-                    .border(1.dp, DarkBorder)
+                    .background(LocalAppColors.current.surface)
+                    .border(1.dp, LocalAppColors.current.border)
                     .padding(12.dp)
             ) {
                 Row(
@@ -991,14 +1052,14 @@ private fun FileTransfersButton(
                 ) {
                     Text(
                         "FILE TRANSFERS",
-                        color = TextPrimary,
+                        color = LocalAppColors.current.textPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.8.sp
                     )
                     Text(
                         "✕",
-                        color = DarkOnBackground.copy(alpha = 0.55f),
+                        color = LocalAppColors.current.textPrimary.copy(alpha = 0.55f),
                         fontSize = 11.sp,
                         modifier = Modifier
                             .clickable { showPanel = false }
@@ -1006,14 +1067,14 @@ private fun FileTransfersButton(
                     )
                 }
                 HorizontalDivider(
-                    color = DarkBorder,
+                    color = LocalAppColors.current.border,
                     thickness = 0.5.dp,
                     modifier = Modifier.padding(vertical = 6.dp)
                 )
                 if (transferQueue.isEmpty()) {
                     Text(
                         "— no pending transfers",
-                        color = DarkOnBackground.copy(alpha = 0.35f),
+                        color = LocalAppColors.current.textPrimary.copy(alpha = 0.35f),
                         fontSize = 9.sp
                     )
                 } else {
@@ -1038,14 +1099,13 @@ private fun TransferPanelRow(
     image: SessionImage,
     onRetry: () -> Unit = {}
 ) {
-    val isFailed = image.uploadState == UploadState.FAILED ||
-            image.uploadState == UploadState.RETRY_REQUIRED
+    val isFailed = image.uploadState == UploadState.FAILED
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, if (isFailed) DarkWarning.copy(alpha = 0.5f) else DarkBorder)
-            .background(if (isFailed) DarkWarning.copy(alpha = 0.05f) else Color.Transparent)
+            .border(0.5.dp, if (isFailed) LocalAppColors.current.warning.copy(alpha = 0.5f) else LocalAppColors.current.border)
+            .background(if (isFailed) LocalAppColors.current.warning.copy(alpha = 0.05f) else Color.Transparent)
             .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1053,7 +1113,7 @@ private fun TransferPanelRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 image.filename,
-                color = DarkOnBackground.copy(alpha = if (isFailed) 1f else 0.85f),
+                color = LocalAppColors.current.textPrimary.copy(alpha = if (isFailed) 1f else 0.85f),
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -1066,14 +1126,13 @@ private fun TransferPanelRow(
                     UploadState.UPLOADING      -> "Uploading…"
                     UploadState.UPLOADED       -> "Uploaded successfully"
                     UploadState.FAILED         -> "Upload failed"
-                    UploadState.RETRY_REQUIRED -> "Retrying — last attempt failed"
                 }
             Text(
                 description,
                 color = when (image.uploadState) {
-                    UploadState.UPLOADED                           -> DarkSuccess.copy(alpha = 0.85f)
-                    UploadState.FAILED, UploadState.RETRY_REQUIRED -> DarkWarning.copy(alpha = 0.85f)
-                    else                                           -> DarkOnBackground.copy(alpha = 0.5f)
+                    UploadState.UPLOADED                           -> LocalAppColors.current.green.copy(alpha = 0.85f)
+                    UploadState.FAILED                             -> LocalAppColors.current.warning.copy(alpha = 0.85f)
+                    else                                           -> LocalAppColors.current.textPrimary.copy(alpha = 0.5f)
                 },
                 fontSize = 8.sp,
                 lineHeight = 11.sp,
@@ -1081,11 +1140,10 @@ private fun TransferPanelRow(
             )
         }
         val (badgeText, badgeColor) = when (image.uploadState) {
-            UploadState.PENDING        -> "PENDING"    to TextSecondary
-            UploadState.UPLOADING      -> "↑ UP"       to Blue
-            UploadState.UPLOADED       -> "✓"          to Green
-            UploadState.FAILED         -> "FAILED"     to Warning
-            UploadState.RETRY_REQUIRED -> "AUTO-RETRY" to Warning
+            UploadState.PENDING        -> "PENDING"    to LocalAppColors.current.textSecondary
+            UploadState.UPLOADING      -> "↑ UP"       to LocalAppColors.current.blue
+            UploadState.UPLOADED       -> "✓"          to LocalAppColors.current.green
+            UploadState.FAILED         -> "FAILED"     to LocalAppColors.current.warning
         }
         Text(
             badgeText,
@@ -1099,13 +1157,379 @@ private fun TransferPanelRow(
         if (isFailed) {
             Box(
                 modifier = Modifier
-                    .border(1.dp, DarkWarning)
-                    .background(DarkWarning.copy(alpha = 0.1f))
+                    .border(1.dp, LocalAppColors.current.warning)
+                    .background(LocalAppColors.current.warning.copy(alpha = 0.1f))
                     .clickable { onRetry() }
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
-                Text("RETRY", color = DarkWarning, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("RETRY", color = LocalAppColors.current.warning, fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
+        }
+    }
+}
+
+// ── Portrait Layout ───────────────────────────────────────────────────────────
+
+@Composable
+private fun PortraitCenterArea(
+    modifier: Modifier = Modifier,
+    deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
+    imageCapture: ImageCapture? = null,
+    latestImage: SessionImage? = null,
+    tetheredStatus: TetheredStatus = TetheredStatus(),
+    onCapture: () -> Unit = {}
+) {
+    Box(
+        modifier = modifier
+            .background(LocalAppColors.current.surface)
+            .border(1.dp, LocalAppColors.current.border)
+    ) {
+        if (deviceMode == DeviceMode.TETHERED_DSLR) {
+            TetheredPanel(modifier = Modifier.fillMaxSize(), status = tetheredStatus, latestImage = latestImage)
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Camera preview (top ~58%)
+                Box(modifier = Modifier.weight(0.58f).fillMaxWidth()) {
+                    CameraPreview(modifier = Modifier.fillMaxSize(), imageCapture = imageCapture)
+                    Row(
+                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        StatusDot(color = LocalAppColors.current.green, size = 6.dp)
+                        Text("LIVE", color = LocalAppColors.current.textSecondary, fontSize = 8.sp, letterSpacing = 1.sp)
+                    }
+                    val canvasBorder = LocalAppColors.current.border
+                    Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+                        val stroke = 1.5.dp.toPx()
+                        val corner = 14.dp.toPx()
+                        val w = size.width; val h = size.height
+                        listOf(
+                            Offset(0f, corner) to Offset(0f, 0f),
+                            Offset(0f, 0f) to Offset(corner, 0f),
+                            Offset(w - corner, 0f) to Offset(w, 0f),
+                            Offset(w, 0f) to Offset(w, corner),
+                            Offset(0f, h - corner) to Offset(0f, h),
+                            Offset(0f, h) to Offset(corner, h),
+                            Offset(w, h - corner) to Offset(w, h),
+                            Offset(w, h) to Offset(w - corner, h),
+                        ).forEach { (start, end) ->
+                            drawLine(canvasBorder.copy(alpha = 0.7f), start, end, strokeWidth = stroke)
+                        }
+                        val fp = 9.dp.toPx()
+                        drawRect(
+                            color = canvasBorder.copy(alpha = 0.6f),
+                            topLeft = Offset(w / 2f - fp, h / 2f - fp),
+                            size = Size(fp * 2, fp * 2),
+                            style = Stroke(width = stroke)
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+
+                // Review pane (middle ~32%)
+                Column(
+                    modifier = Modifier
+                        .weight(0.32f)
+                        .fillMaxWidth()
+                        .padding(6.dp)
+                ) {
+                    Text(
+                        if (latestImage != null)
+                            "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
+                        else
+                            "REVIEW  ·  NO IMAGES",
+                        color = LocalAppColors.current.textDisabled,
+                        fontSize = 7.sp,
+                        letterSpacing = 0.4.sp,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .border(1.dp, LocalAppColors.current.border)
+                            .background(LocalAppColors.current.surfaceRaised)
+                    ) {
+                        if (latestImage != null) {
+                            AsyncImage(
+                                model = latestImage.localPath,
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+
+                // Capture button (bottom fixed)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, LocalAppColors.current.blue)
+                            .background(LocalAppColors.current.blue.copy(alpha = 0.10f))
+                            .clickable { onCapture() }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "◉  CAPTURE",
+                            color = LocalAppColors.current.blue,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.5.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitSessionButtons(
+    onNewSession: () -> Unit = {},
+    onShowHistory: () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(36.dp)
+                .border(1.dp, LocalAppColors.current.border)
+                .clickable { onNewSession() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "NEW SESSION",
+                color = LocalAppColors.current.textPrimary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(36.dp)
+                .border(1.dp, LocalAppColors.current.border)
+                .background(LocalAppColors.current.surfaceRaised)
+                .clickable { onShowHistory() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "SESSION HISTORY",
+                color = LocalAppColors.current.textSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun PortraitThumbnailRail(
+    sessionImages: List<SessionImage> = emptyList(),
+    selectedImageId: Long? = null,
+    onImageSelected: (Long) -> Unit = {}
+) {
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(80.dp)
+            .background(LocalAppColors.current.surface)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Column(
+            modifier = Modifier.width(26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("${sessionImages.size}", color = LocalAppColors.current.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("SHOTS", color = LocalAppColors.current.textDisabled, fontSize = 5.sp, letterSpacing = 0.3.sp)
+        }
+        LazyRow(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(sessionImages) { index, image ->
+                PortraitThumbnail(
+                    image = image,
+                    active = image.id == selectedImageId || (selectedImageId == null && index == 0),
+                    onClick = { onImageSelected(image.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitThumbnail(
+    image: SessionImage,
+    active: Boolean,
+    onClick: () -> Unit = {}
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .aspectRatio(1f)
+            .border(
+                width = if (active) 1.dp else 0.5.dp,
+                color = if (active) LocalAppColors.current.borderActive else LocalAppColors.current.border
+            )
+            .background(LocalAppColors.current.surfaceRaised)
+            .clickable { onClick() }
+    ) {
+        AsyncImage(
+            model = image.localPath,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        if (image.uploadState == UploadState.UPLOADED) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(2.dp)
+                    .background(LocalAppColors.current.green.copy(alpha = 0.90f))
+                    .size(14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✓", color = Color.Black, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitBottomBar(
+    deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
+    activeSession: Session? = null,
+    connectionProfiles: List<ConnectionProfile> = emptyList(),
+    activeConnection: ConnectionProfile? = null,
+    onConnectionSelected: (ConnectionProfile) -> Unit = {}
+) {
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(LocalAppColors.current.surface)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("Active Session", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
+                Text(
+                    activeSession?.barcode ?: "—",
+                    color = LocalAppColors.current.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 2.sp
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ConnectionSelector(
+                profiles = connectionProfiles,
+                activeProfile = activeConnection,
+                onSelected = onConnectionSelected
+            )
+            Spacer(Modifier.weight(1f))
+            Chip(
+                label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered" else "Native",
+                active = true,
+                color = LocalAppColors.current.textSecondary
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionHistorySheet(
+    sessions: List<SessionWithCount>,
+    selectedSessionId: Long? = null,
+    onSessionSelected: (Long) -> Unit = {},
+    onDismiss: () -> Unit = {}
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = LocalAppColors.current.surface,
+        dragHandle = {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(32.dp)
+                        .height(3.dp)
+                        .clip(CircleShape)
+                        .background(LocalAppColors.current.border)
+                )
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .navigationBarsPadding()
+        ) {
+            Text(
+                "SESSION HISTORY",
+                color = LocalAppColors.current.textDisabled,
+                fontSize = 8.sp,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            if (sessions.isEmpty()) {
+                Text(
+                    "— no sessions yet",
+                    color = LocalAppColors.current.textDisabled,
+                    fontSize = 8.sp,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    items(sessions) { swc ->
+                        SessionRow(
+                            swc = swc,
+                            isSelected = swc.session.id == selectedSessionId,
+                            onClick = { onSessionSelected(swc.session.id); onDismiss() }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
@@ -1113,16 +1537,16 @@ private fun TransferPanelRow(
 // ── Shared ────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun Chip(label: String, active: Boolean, color: Color = DarkPrimary) {
+private fun Chip(label: String, active: Boolean, color: Color = LocalAppColors.current.blue) {
     Box(
         modifier = Modifier
-            .border(1.dp, if (active) color else DarkBorder)
+            .border(1.dp, if (active) color else LocalAppColors.current.border)
             .background(if (active) color.copy(alpha = 0.1f) else Color.Transparent)
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
             label,
-            color = if (active) color else DarkOnBackground.copy(alpha = 0.55f),
+            color = if (active) color else LocalAppColors.current.textPrimary.copy(alpha = 0.55f),
             fontSize = 8.sp,
             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
         )
@@ -1130,7 +1554,7 @@ private fun Chip(label: String, active: Boolean, color: Color = DarkPrimary) {
 }
 
 @Composable
-private fun StatusDot(color: Color = Green, size: androidx.compose.ui.unit.Dp = 6.dp) {
+private fun StatusDot(color: Color = LocalAppColors.current.green, size: androidx.compose.ui.unit.Dp = 6.dp) {
     Box(
         modifier = Modifier
             .size(size)
