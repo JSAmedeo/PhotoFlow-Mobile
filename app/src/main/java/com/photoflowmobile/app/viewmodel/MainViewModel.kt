@@ -134,6 +134,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .flatMapLatest { limit -> repository.getSessionsWithImageCount(limit) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // Eagerly so Room is queried immediately at ViewModel creation — value is accurate long
+    // before MainScreen is first composed (splash + navigation takes ≥1.4 s).
+    val noSessionsExist: StateFlow<Boolean> = repository.getAllSessions()
+        .map { it.isEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     val sessionImages: StateFlow<List<SessionImage>> = selectedSessionId
         .flatMapLatest { id ->
             if (id != null) repository.getImagesForSession(id)
@@ -170,8 +176,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val tetheredStatus: StateFlow<TetheredStatus> = mtpCameraManager.status
     val liveViewFrame: StateFlow<ByteArray?>      = mtpCameraManager.liveViewFrame
 
+    // ── No-session prompt ─────────────────────────────────────────────────────
+
+    private val _showNoSessionPrompt = MutableStateFlow(false)
+    val showNoSessionPrompt: StateFlow<Boolean> = _showNoSessionPrompt.asStateFlow()
+    fun dismissNoSessionPrompt() { _showNoSessionPrompt.value = false }
+    fun showNoSessionPrompt()    { _showNoSessionPrompt.value = true }
+
     fun onUsbDeviceAttached(device: UsbDevice) = mtpCameraManager.onDeviceAttached(device)
     fun onUsbDeviceDetached(device: UsbDevice) = mtpCameraManager.onDeviceDetached(device)
+    fun rescanUsbDevices() = mtpCameraManager.rescanForAttachedCamera()
     fun triggerTetheredCapture()               { /* MTP does not support remote shutter */ }
 
     private suspend fun handleTetheredImage(cameraFilename: String, data: ByteArray) {
@@ -362,9 +376,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (session?.id != prevActiveId && prevActiveId != null) {
                     _overrideSessionId.value = null
                 }
-                if (session != null && prevActiveSession == null)
+                if (session != null && prevActiveSession == null) {
                     pipelineLog("[SESSION] started: barcode=${session.barcode}")
-                else if (session == null && prevActiveSession != null)
+                    _showNoSessionPrompt.value = false
+                } else if (session == null && prevActiveSession != null)
                     pipelineLog("[SESSION] completed: barcode=${prevActiveSession!!.barcode}")
                 prevActiveId = session?.id
                 prevActiveSession = session
@@ -411,6 +426,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         startAutoRetryLoop()
         runBackupCleanupIfEnabled()
+
+        // When the user explicitly switches to tethered mode, clear any stale permission-denied
+        // or isConnecting state and immediately rescan. This handles the first-launch case where
+        // the Android CAMERA dialog suppressed the USB dialog, and the accidental-swipe case
+        // where permissionDenied was set and the retry loop permanently stopped.
+        viewModelScope.launch {
+            deviceMode
+                .filter { it == DeviceMode.TETHERED_DSLR }
+                .collect { mtpCameraManager.resetAndRescan() }
+        }
     }
 
     // ── Actions ───────────────────────────────────────────────────────────────
@@ -430,6 +455,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
                     .build()
             )
+        }
+    }
+
+    fun onCaptureRequested() {
+        val session = activeSession.value
+        if (session == null) {
+            _showNoSessionPrompt.value = true
+        } else {
+            capturePhoto(session.id)
         }
     }
 

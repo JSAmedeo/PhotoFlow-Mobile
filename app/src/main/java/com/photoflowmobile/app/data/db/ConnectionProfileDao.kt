@@ -26,4 +26,7 @@ interface ConnectionProfileDao {
 
     @Query("UPDATE connection_profiles SET isActive = 0")
     suspend fun clearAllActive()
+
+    @Query("DELETE FROM connection_profiles")
+    suspend fun deleteAll()
 }

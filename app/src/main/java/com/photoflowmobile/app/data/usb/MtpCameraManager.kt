@@ -42,9 +42,10 @@ class MtpCameraManager(
         private const val TAG = "PhotoFlow/Tether"
         private const val PIPELINE = "PhotoFlow/Pipeline"
         private const val ACTION_USB_PERMISSION = "com.photoflowmobile.USB_PERMISSION"
-        private const val EVENT_POLL_MS    = 500L   // adapter event poll cadence
-        private const val FALLBACK_POLL_MS = 3_000L // object-handle diff fallback cadence
-        private const val HEARTBEAT_MS     = 30_000L
+        private const val EVENT_POLL_MS        = 500L    // adapter event poll cadence
+        private const val FALLBACK_POLL_MS     = 3_000L  // object-handle diff fallback cadence
+        private const val HEARTBEAT_MS         = 30_000L
+        private const val FOREGROUND_RESCAN_MS = 5_000L  // hot-plug poll while app is in foreground
     }
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -60,6 +61,7 @@ class MtpCameraManager(
     @Volatile private var adapter: VendorAdapter? = null
     @Volatile private var ptpConn: PtpConnection? = null
     @Volatile private var isConnecting = false
+    @Volatile private var permissionDenied = false
     private var pollingJob: Job? = null
 
     private val connectionMutex = Mutex()
@@ -83,7 +85,7 @@ class MtpCameraManager(
                 Log.d(TAG, "Permission granted for ${device.productName}")
                 scope.launch(usbDispatcher) { openConnection(device) }
             } else {
-                synchronized(this@MtpCameraManager) { isConnecting = false }
+                synchronized(this@MtpCameraManager) { isConnecting = false; permissionDenied = true }
                 Log.w(TAG, "Permission denied for ${device.productName}")
                 _status.value = TetheredStatus(TetheredState.ERROR, message = "USB permission denied")
             }
@@ -100,9 +102,52 @@ class MtpCameraManager(
         usbManager.deviceList.values
             .firstOrNull { isPtpDevice(it) }
             ?.let { connectOrRequestPermission(it) }
+
+        // On hosts like Motorola that don't dispatch USB_DEVICE_ATTACHED while the app is in
+        // the foreground, onResume() only fires when the app is re-foregrounded. This loop
+        // catches cameras hot-plugged while the app is already actively on-screen.
+        // permissionDenied prevents re-prompting after an explicit denial; it clears on detach.
+        scope.launch {
+            while (true) {
+                delay(FOREGROUND_RESCAN_MS)
+                rescanForAttachedCamera()
+            }
+        }
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Re-scan the USB device list and attempt to connect any PTP camera that is already
+     * physically attached but hasn't been claimed yet. Called from onResume() to handle
+     * devices that were plugged in while the app was backgrounded on hosts (e.g. Motorola)
+     * that don't dispatch USB_DEVICE_ATTACHED intents to apps without a matching USB filter.
+     */
+    /**
+     * Hard-reset connection state and immediately rescan. Called when the user explicitly
+     * switches to tethered mode — clears permissionDenied (in case the USB dialog was
+     * previously dismissed) and isConnecting (in case the 8 s timeout hasn't fired yet),
+     * giving a clean retry without waiting for the loop.
+     */
+    fun resetAndRescan() {
+        synchronized(this) {
+            if (core != null) return  // already connected
+            permissionDenied = false
+            isConnecting = false
+        }
+        Log.i(TAG, "resetAndRescan: clearing stale connection state, rescanning")
+        rescanForAttachedCamera()
+    }
+
+    fun rescanForAttachedCamera() {
+        if (core != null || isConnecting || permissionDenied) return
+        usbManager.deviceList.values
+            .firstOrNull { isPtpDevice(it) }
+            ?.let {
+                Log.i(TAG, "rescan: found PTP device '${it.productName}' — requesting permission")
+                connectOrRequestPermission(it)
+            }
+    }
 
     fun onDeviceAttached(device: UsbDevice) {
         Log.i(PIPELINE, "usb attached: '${device.productName}' " +
@@ -114,7 +159,10 @@ class MtpCameraManager(
     fun onDeviceDetached(device: UsbDevice) {
         Log.i(PIPELINE, "usb detached: '${device.productName}' " +
                 "VID=0x${device.vendorId.toString(16)} PID=0x${device.productId.toString(16)}")
-        if (isPtpDevice(device)) closeConnection()
+        if (isPtpDevice(device)) {
+            permissionDenied = false  // re-plug → allow re-asking on next rescan
+            closeConnection()
+        }
     }
 
     fun release() {
@@ -155,9 +203,26 @@ class MtpCameraManager(
             _status.value = TetheredStatus(TetheredState.CONNECTING, message = "Requesting USB access…")
             Log.d(TAG, "Requesting permission for ${device.productName} " +
                     "VID=0x${device.vendorId.toString(16)} PID=0x${device.productId.toString(16)}")
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), flags)
+            // FLAG_UPDATE_CURRENT: discard any stale PendingIntent from a prior request.
+            // setPackage: makes the broadcast explicit so RECEIVER_NOT_EXPORTED receives it on API 26+.
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+            val intent = Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)
+            val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
             usbManager.requestPermission(device, pi)
+            // If the USB dialog is suppressed (e.g. by the Android CAMERA permission dialog on
+            // first launch), isConnecting would stay true forever and block the rescan loop.
+            // Reset after 8 s — long enough for the user to interact with the dialog, short
+            // enough that the retry appears quickly if the dialog was silently dropped.
+            scope.launch {
+                kotlinx.coroutines.delay(8_000)
+                synchronized(this@MtpCameraManager) {
+                    if (isConnecting && core == null) {
+                        Log.w(TAG, "Permission dialog timed out — resetting isConnecting for retry")
+                        isConnecting = false
+                    }
+                }
+            }
         }
     }
 

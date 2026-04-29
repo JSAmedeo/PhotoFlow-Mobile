@@ -55,6 +55,28 @@ The UI should feel like a professional field operations console, not a consumer 
 
 ## Screen structure
 
+### SplashScreen (PhotoFlowSplash composable)
+- Shown on cold start before the NavGraph loads; lives in `ui/screens/SplashScreen.kt`
+- Dark background (`darkAppColors.background`), centered app icon at 160dp, app name
+  "PhotoFlow Mobile" (Bold, 24sp, 2sp letter spacing). No tagline.
+- App icon is loaded via `AndroidView` wrapping `ImageView` with
+  `ContextCompat.getDrawable(ctx, R.mipmap.ic_launcher)` — `painterResource` cannot handle
+  adaptive mipmap icons (XML-based) and throws `IllegalArgumentException`. 160dp matches the
+  Android 12 OS splash screen icon size spec.
+- Driven by `showSplash: Boolean` state in `MainActivity.setContent`; auto-dismisses after
+  1.4 s via `LaunchedEffect` → `onComplete()` → sets `showSplash = false` → NavGraph loads
+- System splash screen (`core-splashscreen`, `Theme.PhotoFlowMobile.Starting`) fires before
+  Compose renders. `installSplashScreen().setOnExitAnimationListener { it.remove() }` in
+  `MainActivity.onCreate()` suppresses the OS exit animation so the system splash vanishes
+  instantly when Compose renders, eliminating the visible two-screen effect. Android 12+
+  always shows an OS splash that cannot be fully removed; suppressing its exit animation
+  makes the transition imperceptible.
+- Do not use `painterResource(R.mipmap.ic_launcher)` for the splash icon — crashes with
+  `IllegalArgumentException` on adaptive icons; use `AndroidView` + `ImageView` +
+  `ContextCompat.getDrawable` instead
+- Do not lengthen the 1.4 s delay — the splash exists only to display branding, not to gate
+  on any loading work
+
 ### ScanCardScreen
 - Entry point on first launch or when starting a new session
 - Camera viewfinder (dominant) with corner-bracket reticle overlay
@@ -88,17 +110,38 @@ The UI should feel like a professional field operations console, not a consumer 
 - `reviewImage: StateFlow<SessionImage?>` in MainViewModel — resolves to the manually selected
   thumbnail (if set via `selectReviewImage()`) or `sessionImages.firstOrNull()`. Auto-clears
   to latest when the session changes or a new photo arrives (observer compares first-image ID)
+- `noSessionsExist: StateFlow<Boolean>` in MainViewModel — `SharingStarted.Eagerly` so Room
+  collection begins at ViewModel creation, before Compose subscribes. On MainScreen first
+  composition, `LaunchedEffect(Unit)` collects this flow with `.filter { it }.first()` (suspending
+  until `true`) then calls `viewModel.showNoSessionPrompt()`. Must collect the flow — never sample
+  `.value` directly — because Room can take 2–3 s on first load (observed 2.6 s on Motorola G
+  2025) and the initial `false` value would produce a false "has sessions" read.
+- `TetheredPanel` shows a bold "START NEW SESSION\nBEFORE TAKING PHOTO" warning in
+  `LocalAppColors.current.warning` color when `status.state == TetheredState.CONNECTED &&
+  noSessionsExist`. The `noSessionsExist: Boolean` parameter is threaded from MainScreen →
+  `CenterPanel`/`PortraitCenterArea` → `TetheredPanel`. Warning disappears as soon as a session
+  exists. Native Camera mode does not need this — the CAPTURE button already triggers the prompt.
+- `showNoSessionPrompt()` is a public function in MainViewModel that sets
+  `_showNoSessionPrompt.value = true`. It auto-clears in the `activeSession.collect` observer when
+  a non-null session starts. It is called only from `MainScreen`'s `LaunchedEffect(Unit)` — not
+  from `handleTetheredImage()` (which just silently drops the image and logs it).
 
 ### ConfigScreen
 - Left nav rail + right scrollable content
 - Sections (in order): GENERAL, DEVICE MODE, CONNECTIONS, FILE NAMING, ABOUT
 - GENERAL section contains: FILE TRANSFER (auto-retry toggle/interval/max), SESSION HISTORY
-  (max history dropdown: 10/25/50/100/200/Unlimited, default 50), PHOTO BACKUP (save to
-  Pictures/PhotoFlow toggle; auto-delete backups toggle + age dropdown), STORAGE (real
-  StatFs available space; Clear App Cache with confirmation dialog), DIAGNOSTICS, APP INFO
+  (max history dropdown: 10/25/50/100/200/Unlimited, default 50; CLEAR SESSION HISTORY button
+  with confirmation dialog — deletes all completed sessions and their `session_images` rows
+  from Room via `ConfigViewModel.clearSessionHistory()`; preserves the active session and
+  physical image files on disk), PHOTO BACKUP (save to Pictures/PhotoFlow toggle; auto-delete
+  backups toggle + age dropdown), STORAGE (real StatFs available space; Clear App Cache with
+  confirmation dialog), DIAGNOSTICS, APP INFO
 - All settings read/written via DataStore Preferences through ConfigViewModel
 - SAVE CONFIGURATION button persists draft to DataStore; shows ✓ SAVED flash on success
 - Device Mode selection (Tethered DSLR / Native Camera) propagates to MainScreen in real time
+- DEVICE MODE section contains three groups: device mode cards (Tethered/Native), DISPLAY MODE
+  (dark mode toggle — immediately reflected system-wide via `MainViewModel.darkMode` StateFlow),
+  and ORIENTATION LOCK (enabled toggle + lock-to dropdown: Landscape / Portrait / Sensor)
 
 ## Navigation
 - Jetpack Navigation Compose
@@ -244,6 +287,75 @@ cameras lock their physical controls (shutter button, menus). Canon's EOS extens
 opcodes (`SetRemoteMode` + `SetEventMode`) are required to keep the camera responsive
 while connected — and `android.mtp.MtpDevice` gives no way to send them.
 
+### Non-Samsung hosts and USB permission
+
+Tested on Motorola G 2025 (serial `adb-ZY32L9TX7B`). Key difference from Samsung:
+`USB_DEVICE_ATTACHED` is **not dispatched** to PhotoFlow even though a matching USB device filter
+is declared in the manifest. Several system apps and potentially third-party tether apps
+(`com.android.mtp`, `com.google.android.apps.photos`, any installed camera tether app) are also
+registered for PTP class-6 devices and compete for the attach intent.
+
+Four fixes are in place:
+
+1. **`onResume` rescan.** `MainActivity.onResume()` calls `mainViewModel.rescanUsbDevices()` →
+   `MtpCameraManager.rescanForAttachedCamera()`, which re-scans `usbManager.deviceList` and
+   calls `connectOrRequestPermission()` for any PTP device not yet claimed. This fires on every
+   app foreground, catching cameras plugged in while the app was backgrounded.
+
+2. **Explicit PendingIntent.** On API 26+, implicit broadcasts are not delivered to
+   `RECEIVER_NOT_EXPORTED` receivers. The USB permission PendingIntent must use
+   `Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)` (explicit package) plus
+   `FLAG_UPDATE_CURRENT` (discard stale intents from prior calls with the same request code).
+
+3. **8-second `isConnecting` timeout.** If the USB permission dialog is suppressed (e.g. the
+   Android CAMERA permission dialog appears simultaneously on first launch and blocks it),
+   `isConnecting` would stay `true` forever and block the foreground rescan loop. A coroutine
+   resets `isConnecting = false` after 8 s if `core` is still null, so the 5 s rescan loop
+   retries quickly rather than waiting the original 30 s.
+
+4. **Competing default app.** If another USB tether app was previously set as the default handler
+   for PTP devices, Android routes `USB_DEVICE_ATTACHED` to it without showing the app-chooser.
+   Our `requestPermission()` path still works — the permission dialog fires from the rescan
+   regardless of which app got the attach intent — but the other app may claim the USB interface
+   first and block our `openDevice()`. User must clear the other app's USB defaults:
+   Settings → Apps → [other app] → Open by default → Clear defaults.
+
+5. **Foreground hot-plug rescan loop.** `onResume()` only fires when the app is re-foregrounded,
+   so cameras plugged in while PhotoFlow is already on-screen are never detected on Motorola.
+   `MtpCameraManager.init {}` starts a coroutine that calls `rescanForAttachedCamera()` every
+   5 s (`FOREGROUND_RESCAN_MS`). `permissionDenied` flag prevents re-prompting after an explicit
+   denial; it resets to `false` in `onDeviceDetached()` so re-plugging the cable re-enables asking.
+
+6. **`resetAndRescan()` — mode-switch recovery path.** The Android CAMERA permission dialog
+   (triggered by ScanCardScreen's barcode viewfinder on first launch) can suppress the USB
+   permission dialog, leaving `isConnecting = true` and `permissionDenied` potentially set with
+   no dialog ever shown. If the user accidentally swipes the USB dialog away, `permissionDenied`
+   also permanently blocks the rescan loop until the cable is re-plugged.
+   `MtpCameraManager.resetAndRescan()` atomically clears both flags under `synchronized(this)`,
+   then immediately calls `rescanForAttachedCamera()`. It is called automatically by a
+   `deviceMode`-watching coroutine in `MainViewModel.init {}` on every transition to
+   `TETHERED_DSLR` — so switching from Native → Tethered in ConfigScreen gives a guaranteed clean
+   retry without requiring an app restart.
+
+**HARD RULES for the USB permission subsystem — do not violate without re-testing on both devices:**
+
+- **Do not remove `resetAndRescan()`.** It is the only recovery path when `permissionDenied` is
+  set from an accidental dialog swipe or a suppressed-dialog first launch. Without it, the user
+  must unplug and replug the camera or restart the app.
+- **Do not remove or weaken the `deviceMode` watcher** in `MainViewModel.init {}` that calls
+  `resetAndRescan()`. This is what makes mode-switch recovery reliable. Removing it means the
+  user must physically disconnect the camera to clear a stuck state.
+- **Do not lower `isConnecting` timeout below 8 s.** On Motorola, the CAMERA permission dialog
+  can take several seconds to appear and be dismissed. The timeout must be long enough to avoid
+  a false retry that shows the USB dialog while the camera dialog is still on screen.
+- **Do not change `rescanForAttachedCamera()` to ignore `permissionDenied`.** If the user
+  deliberately denies USB access, the loop must stop re-asking. Only a cable re-plug or mode
+  switch (via `resetAndRescan()`) should clear that state.
+- **Do not add `_showNoSessionPrompt.value = true` to `handleTetheredImage()`.** The no-session
+  prompt is now driven by a startup `LaunchedEffect` in `MainScreen` collecting `noSessionsExist`
+  — not by tethered image arrival. The tethered path just silently drops the image and logs it.
+  Adding a prompt there would fire when the user may not be on MainScreen at all.
+
 ### Canon T7 notes
 - VID=0x04A9, PID=0x32E1
 - No "PC Connection mode" setting exists on the T7 — it connects with no camera menu
@@ -260,8 +372,16 @@ while connected — and `android.mtp.MtpDevice` gives no way to send them.
 
 ## Visual design
 - Landscape-only
-- Material3 dark theme
-- High-contrast dark UI
+- Material3 with full light/dark mode support — `PhotoFlowMobileTheme(darkMode: Boolean)` drives
+  both the Material `colorScheme` and the custom `LocalAppColors` CompositionLocal
+- `AppColorScheme` data class (`Color.kt`) — `darkAppColors` / `lightAppColors`; access via
+  `LocalAppColors.current.xxx` in all Composables. Never use hardcoded `Color(0xFF...)` for UI
+  colors — always go through `LocalAppColors.current`
+- Canvas DrawScope limitation: `LocalAppColors.current` cannot be called inside a `Canvas { }`
+  block (not a composable context). Capture colors as local `val`s before the Canvas block and
+  reference them by closure inside the DrawScope.
+- Default is dark mode; toggled via ConfigScreen → DEVICE MODE → DISPLAY MODE
+- High-contrast dark UI; light mode also high-contrast
 - Professional operations-console feel
 - Clear bordered panels and compact status labels
 - Large touch targets
@@ -299,6 +419,9 @@ while connected — and `android.mtp.MtpDevice` gives no way to send them.
 
 ### AppSettings (DataStore, not Room)
 - deviceMode (DeviceMode enum)
+- darkMode (Boolean, default true) — drives `PhotoFlowMobileTheme` and status bar appearance
+- orientationLockEnabled (Boolean, default false)
+- orientationLock (OrientationLock enum — LANDSCAPE / PORTRAIT / SENSOR)
 - autoReconnect, previewQuality, sessionTimeout
 - ftpHost, ftpPort, ftpUsername, ftpPassword, ftpRemotePath
 - namingFields (List<NamingField>, pipe-delimited in DataStore)
@@ -338,3 +461,12 @@ At a glance, the operator should always be able to tell:
 - Do not use the default `viewModel()` for `MainScreen` in `NavGraph.kt` — it must be `viewModel(activity)` with `activity = LocalContext.current as ComponentActivity`, otherwise a second `MtpCameraManager` will be created and race for the USB interface
 - Do not move USB I/O off `usbDispatcher` (the `PhotoFlow-USB` single-thread executor) — `bulkTransfer` calls crossing threads on the same `UsbDeviceConnection` break silently on Samsung
 - Do not "fix" the 1–3 s post-shot import latency on the Canon T7 by tightening the poll cadence — Canon `GetEvent` is silent on the T7 and the diff-poll is the actual delivery path
+- Do not use an implicit `Intent(ACTION)` inside a USB permission PendingIntent — always add `.setPackage(context.packageName)` to make it explicit; implicit broadcasts are silently dropped by `RECEIVER_NOT_EXPORTED` receivers on API 26+
+- Do not use `PendingIntent.FLAG_MUTABLE` alone for USB permissions — also add `FLAG_UPDATE_CURRENT` to discard stale intents from prior calls with the same request code
+- Do not rely solely on `USB_DEVICE_ATTACHED` intent delivery for tethering — Motorola and other non-Samsung hosts may not dispatch it to the app; the `onResume` rescan path in `MainActivity` is the primary trigger on those devices
+- Do not hardcode `Color(0xFF...)` values for UI colors — always use `LocalAppColors.current.xxx` so light/dark mode works correctly
+- Do not use `painterResource(R.mipmap.ic_launcher)` to display the app icon in Compose — adaptive mipmap icons are XML and `painterResource` throws `IllegalArgumentException`; use `AndroidView` wrapping `ImageView` with `ContextCompat.getDrawable(ctx, R.mipmap.ic_launcher)` instead
+- Do not read `noSessionsExist.value` directly in a `LaunchedEffect` — on Motorola G 2025, Room
+  takes 2–3 s to emit the first DB result; the StateFlow initial value is `false` (appears to have
+  sessions) and the prompt will silently not fire. Always collect the flow with
+  `.filter { it }.first()` to suspend until Room actually confirms the table is empty.

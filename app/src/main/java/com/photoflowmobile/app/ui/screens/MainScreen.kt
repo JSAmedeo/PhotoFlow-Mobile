@@ -24,9 +24,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
@@ -40,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -76,6 +79,8 @@ import com.photoflowmobile.app.data.usb.TetheredState
 import com.photoflowmobile.app.data.usb.TetheredStatus
 import com.photoflowmobile.app.ui.theme.*
 import com.photoflowmobile.app.viewmodel.MainViewModel
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun MainScreen(
@@ -110,10 +115,52 @@ fun MainScreen(
         }
     }
     val selectedSession by viewModel.selectedSession.collectAsStateWithLifecycle()
+    val showNoSessionPrompt by viewModel.showNoSessionPrompt.collectAsStateWithLifecycle()
+    val noSessionsExist by viewModel.noSessionsExist.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        // Collect rather than sample .value — Room can take 2-3 s on first load.
+        // filter { it } suspends harmlessly until noSessionsExist becomes true; if sessions
+        // exist the emission is always false and this coroutine is cancelled when the screen leaves.
+        viewModel.noSessionsExist
+            .filter { it }
+            .first()
+        viewModel.showNoSessionPrompt()
+    }
 
     val configuration = LocalConfiguration.current
     val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
     var showSessionHistory by remember { mutableStateOf(false) }
+
+    if (showNoSessionPrompt) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissNoSessionPrompt() },
+            containerColor = LocalAppColors.current.surface,
+            titleContentColor = LocalAppColors.current.textPrimary,
+            title = { Text("No Active Session", fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Scan a card to start a new session before capturing.",
+                    color = LocalAppColors.current.textSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissNoSessionPrompt()
+                    onNewSession()
+                }) {
+                    Text("SCAN CARD", color = LocalAppColors.current.blue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissNoSessionPrompt() }) {
+                    Text("DISMISS", color = LocalAppColors.current.textSecondary, fontSize = 11.sp)
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -137,16 +184,17 @@ fun MainScreen(
                 imageCapture = viewModel.imageCapture,
                 latestImage = reviewImage,
                 tetheredStatus = tetheredStatus,
-                onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
+                noSessionsExist = noSessionsExist,
+                onCapture = { viewModel.onCaptureRequested() }
             )
             PortraitThumbnailRail(
                 sessionImages = sessionImages,
                 selectedImageId = reviewImage?.id,
+                activeSession = selectedSession ?: activeSession,
                 onImageSelected = { viewModel.selectReviewImage(it) }
             )
             PortraitBottomBar(
                 deviceMode = deviceMode,
-                activeSession = selectedSession ?: activeSession,
                 connectionProfiles = connectionProfiles,
                 activeConnection = activeConnection,
                 onConnectionSelected = { viewModel.setActiveConnection(it) }
@@ -171,8 +219,9 @@ fun MainScreen(
                     imageCapture = viewModel.imageCapture,
                     latestImage = reviewImage,
                     tetheredStatus = tetheredStatus,
+                    noSessionsExist = noSessionsExist,
                     onRemoteTrigger = { viewModel.triggerTetheredCapture() },
-                    onCapture = { selectedSessionId?.let { viewModel.capturePhoto(it) } }
+                    onCapture = { viewModel.onCaptureRequested() }
                 )
                 RightPanel(
                     modifier = Modifier.width(99.dp).fillMaxHeight(),
@@ -350,19 +399,28 @@ private fun LeftPanel(
             fontSize = 7.sp,
             letterSpacing = 0.5.sp
         )
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            itemsIndexed(sessionImages) { index, image ->
-                ThumbnailCell(
-                    localPath = image.localPath,
-                    label = image.filename,
-                    uploadState = image.uploadState,
-                    active = image.id == selectedImageId || (selectedImageId == null && index == 0),
-                    onClick = { onImageSelected(image.id) }
-                )
+        val columnState = rememberLazyListState()
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = columnState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                itemsIndexed(sessionImages) { index, image ->
+                    ThumbnailCell(
+                        localPath = image.localPath,
+                        label = image.filename,
+                        uploadState = image.uploadState,
+                        active = image.id == selectedImageId || (selectedImageId == null && index == 0),
+                        onClick = { onImageSelected(image.id) }
+                    )
+                }
             }
+            VerticalScrollbarIndicator(
+                listState = columnState,
+                color = LocalAppColors.current.borderActive,
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(3.dp)
+            )
         }
     }
 }
@@ -428,6 +486,7 @@ private fun CenterPanel(
     imageCapture: ImageCapture? = null,
     latestImage: SessionImage? = null,
     tetheredStatus: TetheredStatus = TetheredStatus(),
+    noSessionsExist: Boolean = false,
     onRemoteTrigger: () -> Unit = {},
     onCapture: () -> Unit = {}
 ) {
@@ -441,7 +500,8 @@ private fun CenterPanel(
             TetheredPanel(
                 modifier = Modifier.fillMaxSize(),
                 status = tetheredStatus,
-                latestImage = latestImage
+                latestImage = latestImage,
+                noSessionsExist = noSessionsExist
             )
         } else {
             Row(modifier = Modifier.fillMaxSize()) {
@@ -504,6 +564,7 @@ private fun CenterPanel(
                 )
 
                 // ── Review pane + capture button (right ~42%) ────────
+                var showFullscreenLandscape by remember { mutableStateOf(false) }
                 Column(
                     modifier = Modifier
                         .weight(0.42f)
@@ -515,22 +576,26 @@ private fun CenterPanel(
                             .fillMaxWidth()
                             .padding(6.dp)
                     ) {
-                        Text(
-                            if (latestImage != null)
-                                "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
-                            else
-                                "REVIEW  ·  NO IMAGES",
-                            color = LocalAppColors.current.textDisabled,
-                            fontSize = 7.sp,
-                            letterSpacing = 0.4.sp,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("REVIEW", color = LocalAppColors.current.textSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            if (latestImage != null) {
+                                Text("  ·  ", color = LocalAppColors.current.textDisabled, fontSize = 8.sp)
+                                Text(latestImage.filename, color = LocalAppColors.current.textPrimary, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                Text("  ${relativeTimeLabel(latestImage.timestamp)} AGO", color = LocalAppColors.current.textSecondary, fontSize = 8.sp)
+                            } else {
+                                Text("  ·  NO IMAGES", color = LocalAppColors.current.textDisabled, fontSize = 8.sp)
+                            }
+                        }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
                                 .border(1.dp, LocalAppColors.current.border)
                                 .background(LocalAppColors.current.surfaceRaised)
+                                .clickable(enabled = latestImage != null) { showFullscreenLandscape = true }
                         ) {
                             if (latestImage != null) {
                                 AsyncImage(
@@ -539,8 +604,12 @@ private fun CenterPanel(
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                Text("⤢", color = LocalAppColors.current.textDisabled, fontSize = 12.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp))
                             }
                         }
+                    }
+                    if (showFullscreenLandscape && latestImage != null) {
+                        ReviewFullscreenDialog(image = latestImage, onDismiss = { showFullscreenLandscape = false })
                     }
                     HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
                     Box(
@@ -576,7 +645,8 @@ private fun CenterPanel(
 private fun TetheredPanel(
     modifier: Modifier = Modifier,
     status: TetheredStatus = TetheredStatus(),
-    latestImage: SessionImage? = null
+    latestImage: SessionImage? = null,
+    noSessionsExist: Boolean = false
 ) {
     Box(modifier = modifier) {
 
@@ -655,12 +725,15 @@ private fun TetheredPanel(
                     fontSize = 9.sp,
                     letterSpacing = 0.8.sp
                 )
-                if (status.state == TetheredState.DISCONNECTED) {
+                if (status.state == TetheredState.CONNECTED && noSessionsExist) {
                     Text(
-                        "Camera: Menu → Communication Settings → USB Connection → PC Connection",
-                        color = LocalAppColors.current.textPrimary.copy(alpha = 0.25f),
-                        fontSize = 7.sp,
-                        letterSpacing = 0.3.sp
+                        "START NEW SESSION\nBEFORE TAKING PHOTO",
+                        color = LocalAppColors.current.warning,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        letterSpacing = 0.5.sp,
+                        lineHeight = 22.sp
                     )
                 }
                 if (status.state == TetheredState.ERROR) {
@@ -1177,6 +1250,7 @@ private fun PortraitCenterArea(
     imageCapture: ImageCapture? = null,
     latestImage: SessionImage? = null,
     tetheredStatus: TetheredStatus = TetheredStatus(),
+    noSessionsExist: Boolean = false,
     onCapture: () -> Unit = {}
 ) {
     Box(
@@ -1185,7 +1259,7 @@ private fun PortraitCenterArea(
             .border(1.dp, LocalAppColors.current.border)
     ) {
         if (deviceMode == DeviceMode.TETHERED_DSLR) {
-            TetheredPanel(modifier = Modifier.fillMaxSize(), status = tetheredStatus, latestImage = latestImage)
+            TetheredPanel(modifier = Modifier.fillMaxSize(), status = tetheredStatus, latestImage = latestImage, noSessionsExist = noSessionsExist)
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Camera preview (top ~58%)
@@ -1229,28 +1303,51 @@ private fun PortraitCenterArea(
                 HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
 
                 // Review pane (middle ~32%)
+                var showFullscreen by remember { mutableStateOf(false) }
                 Column(
                     modifier = Modifier
                         .weight(0.32f)
                         .fillMaxWidth()
                         .padding(6.dp)
                 ) {
-                    Text(
-                        if (latestImage != null)
-                            "REVIEW  ·  ${latestImage.filename}  ·  ${relativeTimeLabel(latestImage.timestamp)} AGO"
-                        else
-                            "REVIEW  ·  NO IMAGES",
-                        color = LocalAppColors.current.textDisabled,
-                        fontSize = 7.sp,
-                        letterSpacing = 0.4.sp,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "REVIEW",
+                            color = LocalAppColors.current.textSecondary,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        if (latestImage != null) {
+                            Text("  ·  ", color = LocalAppColors.current.textDisabled, fontSize = 8.sp)
+                            Text(
+                                latestImage.filename,
+                                color = LocalAppColors.current.textPrimary,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "  ${relativeTimeLabel(latestImage.timestamp)} AGO",
+                                color = LocalAppColors.current.textSecondary,
+                                fontSize = 8.sp
+                            )
+                        } else {
+                            Text("  ·  NO IMAGES", color = LocalAppColors.current.textDisabled, fontSize = 8.sp)
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
                             .border(1.dp, LocalAppColors.current.border)
                             .background(LocalAppColors.current.surfaceRaised)
+                            .clickable(enabled = latestImage != null) { showFullscreen = true }
                     ) {
                         if (latestImage != null) {
                             AsyncImage(
@@ -1259,8 +1356,17 @@ private fun PortraitCenterArea(
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize()
                             )
+                            Text(
+                                "⤢",
+                                color = LocalAppColors.current.textDisabled,
+                                fontSize = 12.sp,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                            )
                         }
                     }
+                }
+                if (showFullscreen && latestImage != null) {
+                    ReviewFullscreenDialog(image = latestImage, onDismiss = { showFullscreen = false })
                 }
 
                 HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
@@ -1345,35 +1451,66 @@ private fun PortraitSessionButtons(
 private fun PortraitThumbnailRail(
     sessionImages: List<SessionImage> = emptyList(),
     selectedImageId: Long? = null,
+    activeSession: Session? = null,
     onImageSelected: (Long) -> Unit = {}
 ) {
-    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
-    Row(
+    val colors = LocalAppColors.current
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(80.dp)
-            .background(LocalAppColors.current.surface)
-            .padding(horizontal = 6.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
+            .border(1.dp, colors.borderActive)
+            .background(colors.surface)
     ) {
-        Column(
-            modifier = Modifier.width(26.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(colors.surfaceRaised)
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
-            Text("${sessionImages.size}", color = LocalAppColors.current.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("SHOTS", color = LocalAppColors.current.textDisabled, fontSize = 5.sp, letterSpacing = 0.3.sp)
+            Text("Active Session", color = colors.textDisabled, fontSize = 9.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                activeSession?.barcode ?: "—",
+                color = colors.textPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 2.sp
+            )
         }
-        LazyRow(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        HorizontalDivider(color = colors.borderActive, thickness = 1.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(80.dp)
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            itemsIndexed(sessionImages) { index, image ->
-                PortraitThumbnail(
-                    image = image,
-                    active = image.id == selectedImageId || (selectedImageId == null && index == 0),
-                    onClick = { onImageSelected(image.id) }
-                )
+            Column(
+                modifier = Modifier.width(26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("${sessionImages.size}", color = colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("SHOTS", color = colors.textDisabled, fontSize = 5.sp, letterSpacing = 0.3.sp)
+            }
+            val rowState = rememberLazyListState()
+            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                LazyRow(
+                    state = rowState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    itemsIndexed(sessionImages) { index, image ->
+                        PortraitThumbnail(
+                            image = image,
+                            active = image.id == selectedImageId || (selectedImageId == null && index == 0),
+                            onClick = { onImageSelected(image.id) }
+                        )
+                    }
+                }
+                HorizontalScrollbarIndicator(rowState, colors.borderActive)
             }
         }
     }
@@ -1420,50 +1557,29 @@ private fun PortraitThumbnail(
 @Composable
 private fun PortraitBottomBar(
     deviceMode: DeviceMode = DeviceMode.TETHERED_DSLR,
-    activeSession: Session? = null,
     connectionProfiles: List<ConnectionProfile> = emptyList(),
     activeConnection: ConnectionProfile? = null,
     onConnectionSelected: (ConnectionProfile) -> Unit = {}
 ) {
     HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(LocalAppColors.current.surface)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text("Active Session", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
-                Text(
-                    activeSession?.barcode ?: "—",
-                    color = LocalAppColors.current.textPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 2.sp
-                )
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ConnectionSelector(
-                profiles = connectionProfiles,
-                activeProfile = activeConnection,
-                onSelected = onConnectionSelected
-            )
-            Spacer(Modifier.weight(1f))
-            Chip(
-                label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered" else "Native",
-                active = true,
-                color = LocalAppColors.current.textSecondary
-            )
-        }
+        ConnectionSelector(
+            profiles = connectionProfiles,
+            activeProfile = activeConnection,
+            onSelected = onConnectionSelected
+        )
+        Spacer(Modifier.weight(1f))
+        Chip(
+            label = if (deviceMode == DeviceMode.TETHERED_DSLR) "Tethered Mode" else "Native Mode",
+            active = true,
+            color = LocalAppColors.current.textSecondary
+        )
     }
 }
 
@@ -1551,6 +1667,111 @@ private fun Chip(label: String, active: Boolean, color: Color = LocalAppColors.c
             fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
         )
     }
+}
+
+@Composable
+private fun ReviewFullscreenDialog(image: SessionImage, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.7f))
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .fillMaxHeight(0.72f)
+                    .border(1.dp, LocalAppColors.current.borderActive)
+                    .background(LocalAppColors.current.surface)
+                    .clickable { onDismiss() }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(LocalAppColors.current.surfaceRaised)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        image.filename,
+                        color = LocalAppColors.current.textPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${relativeTimeLabel(image.timestamp)} AGO",
+                        color = LocalAppColors.current.textSecondary,
+                        fontSize = 9.sp
+                    )
+                }
+                HorizontalDivider(color = LocalAppColors.current.borderActive, thickness = 1.dp)
+                AsyncImage(
+                    model = image.localPath,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HorizontalScrollbarIndicator(listState: LazyListState, color: Color) {
+    // Always occupies 3dp — no early return — so LazyRow height never fluctuates.
+    // State is read in drawBehind (draw phase only), avoiding recomposition loops.
+    val trackColor = color.copy(alpha = 0.2f)
+    Spacer(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(3.dp)
+            .drawBehind {
+                val info = listState.layoutInfo
+                val total = info.totalItemsCount
+                val visible = info.visibleItemsInfo.size
+                if (total <= visible) return@drawBehind
+                val thumbFraction = (visible.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                val scrollFraction = (listState.firstVisibleItemIndex.toFloat() / (total - visible).toFloat()).coerceIn(0f, 1f)
+                drawRect(trackColor)
+                val thumbWidth = size.width * thumbFraction
+                drawRect(
+                    color = color,
+                    topLeft = Offset((size.width - thumbWidth) * scrollFraction, 0f),
+                    size = Size(thumbWidth, size.height)
+                )
+            }
+    )
+}
+
+@Composable
+private fun VerticalScrollbarIndicator(listState: LazyListState, color: Color, modifier: Modifier = Modifier) {
+    val trackColor = color.copy(alpha = 0.2f)
+    Spacer(
+        modifier = modifier.drawBehind {
+            val info = listState.layoutInfo
+            val total = info.totalItemsCount
+            val visible = info.visibleItemsInfo.size
+            if (total <= visible) return@drawBehind
+            val thumbFraction = (visible.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+            val scrollFraction = (listState.firstVisibleItemIndex.toFloat() / (total - visible).toFloat()).coerceIn(0f, 1f)
+            drawRect(trackColor)
+            val thumbHeight = size.height * thumbFraction
+            drawRect(
+                color = color,
+                topLeft = Offset(0f, (size.height - thumbHeight) * scrollFraction),
+                size = Size(size.width, thumbHeight)
+            )
+        }
+    )
 }
 
 @Composable

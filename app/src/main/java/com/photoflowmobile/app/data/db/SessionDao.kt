@@ -32,4 +32,10 @@ interface SessionDao {
 
     @Update
     suspend fun update(session: Session)
+
+    @Query("DELETE FROM session_images WHERE sessionId IN (SELECT id FROM sessions WHERE status != 'active')")
+    suspend fun deleteImagesForCompletedSessions()
+
+    @Query("DELETE FROM sessions WHERE status != 'active'")
+    suspend fun deleteCompletedSessions()
 }

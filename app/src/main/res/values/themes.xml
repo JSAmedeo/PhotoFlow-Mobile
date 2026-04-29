@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.PhotoFlowMobile" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Base app theme. Dark window background prevents white flash before Compose renders. -->
+    <style name="Theme.PhotoFlowMobile" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
+
+    <!-- Splash theme: shown during cold start. Switches to base theme via postSplashScreenTheme. -->
+    <style name="Theme.PhotoFlowMobile.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.PhotoFlowMobile</item>
+    </style>
+
 </resources>

@@ -1,6 +1,12 @@
 package com.photoflowmobile.app.viewmodel
 
 import android.app.Application
+import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.AndroidViewModel
@@ -9,20 +15,31 @@ import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
 import com.photoflowmobile.app.data.datastore.toPreferences
-import com.photoflowmobile.app.data.model.AppSettings
-import com.photoflowmobile.app.data.model.ConnectionProfile
-import com.photoflowmobile.app.data.model.ConnectionType
+import com.photoflowmobile.app.data.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.commons.net.ftp.FTPClient
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
+import java.io.OutputStreamWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+sealed class SettingsTransferResult {
+    data class ExportSuccess(val displayPath: String) : SettingsTransferResult()
+    object ImportSuccess : SettingsTransferResult()
+    data class Error(val message: String) : SettingsTransferResult()
+}
 
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dataStore = application.settingsDataStore
     private val connectionProfileDao = (application as PhotoFlowApplication).database.connectionProfileDao()
+    private val sessionDao = (application as PhotoFlowApplication).database.sessionDao()
 
     val settings: StateFlow<AppSettings> = dataStore.data
         .catch { e ->
@@ -38,6 +55,11 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     val connectionProfiles: StateFlow<List<ConnectionProfile>> =
         connectionProfileDao.getAllProfiles()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _transferResult = MutableStateFlow<SettingsTransferResult?>(null)
+    val transferResult: StateFlow<SettingsTransferResult?> = _transferResult.asStateFlow()
+
+    fun clearTransferResult() { _transferResult.value = null }
 
     fun save(settings: AppSettings) {
         viewModelScope.launch {
@@ -60,6 +82,13 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             connectionProfileDao.clearAllActive()
             connectionProfileDao.update(profile.copy(isActive = true))
+        }
+    }
+
+    fun clearSessionHistory() {
+        viewModelScope.launch {
+            sessionDao.deleteImagesForCompletedSessions()
+            sessionDao.deleteCompletedSessions()
         }
     }
 
@@ -90,4 +119,143 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             onResult(error)
         }
     }
+
+    fun exportSettings(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val currentSettings = settings.value
+                val profiles = connectionProfiles.value
+
+                val timestamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                val fileName = "photoflow-settings-$timestamp.json"
+                val json = JSONObject().apply {
+                    put("version", 1)
+                    put("exported_at", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date()))
+                    put("settings", settingsToJson(currentSettings))
+                    put("connection_profiles", profilesToJson(profiles))
+                }
+                val jsonString = json.toString(2)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/json")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw Exception("Could not create file in Downloads")
+                    resolver.openOutputStream(uri)?.use { out ->
+                        OutputStreamWriter(out).use { writer -> writer.write(jsonString) }
+                    }
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    downloadsDir.mkdirs()
+                    java.io.File(downloadsDir, fileName).writeText(jsonString)
+                }
+
+                _transferResult.value = SettingsTransferResult.ExportSuccess("Downloads/$fileName")
+            } catch (e: Exception) {
+                _transferResult.value = SettingsTransferResult.Error("Export failed: ${e.message}")
+            }
+        }
+    }
+
+    fun importSettings(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val jsonString = context.contentResolver.openInputStream(uri)?.use { input ->
+                    input.bufferedReader().readText()
+                } ?: throw Exception("Could not read selected file")
+
+                val root = JSONObject(jsonString)
+                val version = root.optInt("version", 1)
+                if (version > 1) throw Exception("Unsupported settings file version ($version)")
+
+                val newSettings = settingsFromJson(root.getJSONObject("settings"))
+                dataStore.edit { prefs -> newSettings.toPreferences(prefs) }
+
+                val profilesJson = root.optJSONArray("connection_profiles")
+                if (profilesJson != null) {
+                    connectionProfileDao.deleteAll()
+                    for (i in 0 until profilesJson.length()) {
+                        connectionProfileDao.insert(profileFromJson(profilesJson.getJSONObject(i)))
+                    }
+                }
+
+                _transferResult.value = SettingsTransferResult.ImportSuccess
+            } catch (e: Exception) {
+                _transferResult.value = SettingsTransferResult.Error("Import failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun settingsToJson(s: AppSettings) = JSONObject().apply {
+        put("device_mode", s.deviceMode.name)
+        put("dark_mode", s.darkMode)
+        put("naming_fields", serializeNamingFields(s.namingFields))
+        put("naming_separator", s.namingSeparator)
+        put("naming_extension", s.namingExtension)
+        put("logging_enabled", s.loggingEnabled)
+        put("auto_retry_enabled", s.autoRetryEnabled)
+        put("auto_retry_interval_secs", s.autoRetryIntervalSeconds)
+        put("auto_retry_max_count", s.autoRetryMaxCount)
+        put("session_history_max", s.sessionHistoryMax)
+        put("save_backup_to_phone", s.saveBackupToPhone)
+        put("auto_delete_backups", s.autoDeleteBackups)
+        put("auto_delete_after_days", s.autoDeleteAfterDays)
+        put("orientation_lock_enabled", s.orientationLockEnabled)
+        put("orientation_lock", s.orientationLock.name)
+    }
+
+    private fun settingsFromJson(j: JSONObject) = AppSettings(
+        deviceMode = DeviceMode.entries.firstOrNull { it.name == j.optString("device_mode") }
+            ?: DeviceMode.TETHERED_DSLR,
+        darkMode = j.optBoolean("dark_mode", true),
+        namingFields = deserializeNamingFields(j.optString("naming_fields")),
+        namingSeparator = j.optString("naming_separator", "_"),
+        namingExtension = j.optString("naming_extension", "JPG"),
+        loggingEnabled = j.optBoolean("logging_enabled", true),
+        autoRetryEnabled = j.optBoolean("auto_retry_enabled", true),
+        autoRetryIntervalSeconds = j.optInt("auto_retry_interval_secs", 4),
+        autoRetryMaxCount = j.optInt("auto_retry_max_count", -1),
+        sessionHistoryMax = j.optInt("session_history_max", 50),
+        saveBackupToPhone = j.optBoolean("save_backup_to_phone", false),
+        autoDeleteBackups = j.optBoolean("auto_delete_backups", false),
+        autoDeleteAfterDays = j.optInt("auto_delete_after_days", 30),
+        orientationLockEnabled = j.optBoolean("orientation_lock_enabled", false),
+        orientationLock = OrientationLock.entries.firstOrNull { it.name == j.optString("orientation_lock") }
+            ?: OrientationLock.LANDSCAPE
+    )
+
+    private fun profilesToJson(profiles: List<ConnectionProfile>) = JSONArray().apply {
+        profiles.forEach { p ->
+            put(JSONObject().apply {
+                put("name", p.name)
+                put("connection_type", p.connectionType.name)
+                put("host", p.host)
+                put("port", p.port)
+                put("username", p.username)
+                put("password", p.password)
+                put("remote_path", p.remotePath)
+                put("is_active", p.isActive)
+            })
+        }
+    }
+
+    private fun profileFromJson(j: JSONObject) = ConnectionProfile(
+        name = j.optString("name"),
+        connectionType = ConnectionType.entries.firstOrNull { it.name == j.optString("connection_type") }
+            ?: ConnectionType.FTP,
+        host = j.optString("host"),
+        port = j.optInt("port", 21),
+        username = j.optString("username"),
+        password = j.optString("password"),
+        remotePath = j.optString("remote_path", "/"),
+        isActive = j.optBoolean("is_active", false)
+    )
 }

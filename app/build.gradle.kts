@@ -1,9 +1,14 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)                  // for Room annotation processing
 }
+
+val buildTime: String = SimpleDateFormat("yyyyMMdd-HHmm").format(Date())
 
 android {
     namespace = "com.photoflowmobile.app"
@@ -13,9 +18,10 @@ android {
         applicationId = "com.photoflowmobile.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
     }
 
     buildTypes {
@@ -42,6 +48,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Apache Commons Net is a standard JAR — tell the packager to keep all META-INF
@@ -50,12 +57,21 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl)
+                .outputFileName = "PhotoFlow-${variant.buildType.name}-$buildTime.apk"
+        }
+    }
 }
 
 dependencies {
 
     // ── Core ────────────────────────────────────────────────
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
 

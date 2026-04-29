@@ -14,9 +14,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.photoflowmobile.app.navigation.PhotoFlowNavGraph
+import com.photoflowmobile.app.ui.screens.PhotoFlowSplash
 import com.photoflowmobile.app.ui.theme.PhotoFlowMobileTheme
 import com.photoflowmobile.app.viewmodel.MainViewModel
 
@@ -38,6 +43,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen().setOnExitAnimationListener { it.remove() }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
@@ -55,14 +61,21 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val darkMode by mainViewModel.darkMode.collectAsStateWithLifecycle()
+            var showSplash by remember { mutableStateOf(true) }
+
             SideEffect {
                 WindowCompat.getInsetsController(window, window.decorView).apply {
                     isAppearanceLightStatusBars = !darkMode
                     isAppearanceLightNavigationBars = !darkMode
                 }
             }
+
             PhotoFlowMobileTheme(darkMode = darkMode) {
-                PhotoFlowNavGraph()
+                if (showSplash) {
+                    PhotoFlowSplash { showSplash = false }
+                } else {
+                    PhotoFlowNavGraph()
+                }
             }
         }
     }
@@ -72,6 +85,14 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleUsbIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Motorola (and some other hosts) don't dispatch USB_DEVICE_ATTACHED to apps without a
+        // matching USB device filter in the manifest. Re-scanning on every resume ensures we
+        // catch cameras that were plugged in while the app was backgrounded.
+        mainViewModel.rescanUsbDevices()
     }
 
     override fun onDestroy() {

@@ -23,16 +23,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.app.Activity
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Environment
 import android.os.StatFs
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import com.photoflowmobile.app.BuildConfig
 import com.photoflowmobile.app.data.model.*
 import com.photoflowmobile.app.ui.theme.*
 import com.photoflowmobile.app.viewmodel.ConfigViewModel
+import com.photoflowmobile.app.viewmodel.SettingsTransferResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -59,7 +64,60 @@ fun ConfigScreen(
     val connectionProfiles by viewModel.connectionProfiles.collectAsStateWithLifecycle()
     val configuration = LocalConfiguration.current
     val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-    val activity = LocalContext.current as? Activity
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val transferResult by viewModel.transferResult.collectAsStateWithLifecycle()
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.importSettings(context.applicationContext, it) }
+    }
+
+    transferResult?.let { result ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearTransferResult() },
+            containerColor = LocalAppColors.current.surface,
+            titleContentColor = LocalAppColors.current.textPrimary,
+            title = {
+                Text(
+                    when (result) {
+                        is SettingsTransferResult.ExportSuccess -> "Settings Exported"
+                        is SettingsTransferResult.ImportSuccess -> "Settings Imported"
+                        is SettingsTransferResult.Error -> "Transfer Failed"
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    when (result) {
+                        is SettingsTransferResult.ExportSuccess -> {
+                            Text("File saved to:", color = LocalAppColors.current.textSecondary, fontSize = 10.sp)
+                            Spacer(Modifier.height(2.dp))
+                            Text(result.displayPath, color = LocalAppColors.current.green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        is SettingsTransferResult.ImportSuccess -> {
+                            Text(
+                                "All settings and connection profiles have been loaded successfully.",
+                                color = LocalAppColors.current.green,
+                                fontSize = 10.sp
+                            )
+                        }
+                        is SettingsTransferResult.Error -> {
+                            Text(result.message, color = LocalAppColors.current.warning, fontSize = 10.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearTransferResult() }) {
+                    Text("OK", color = LocalAppColors.current.blue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
 
     LaunchedEffect(settings.orientationLockEnabled, settings.orientationLock) {
         activity?.requestedOrientation = if (!settings.orientationLockEnabled) {
@@ -83,6 +141,9 @@ fun ConfigScreen(
             onDeleteProfile = viewModel::deleteProfile,
             onSetActiveProfile = viewModel::setActiveProfile,
             onTestConnection = viewModel::testConnection,
+            onClearSessionHistory = viewModel::clearSessionHistory,
+            onExportSettings = { viewModel.exportSettings(context.applicationContext) },
+            onPickImportFile = { importLauncher.launch(arrayOf("application/json", "*/*")) },
             onNavigateBack = onNavigateBack
         )
     } else {
@@ -107,6 +168,9 @@ fun ConfigScreen(
                 onDeleteProfile = viewModel::deleteProfile,
                 onSetActiveProfile = viewModel::setActiveProfile,
                 onTestConnection = viewModel::testConnection,
+                onClearSessionHistory = viewModel::clearSessionHistory,
+                onExportSettings = { viewModel.exportSettings(context.applicationContext) },
+                onPickImportFile = { importLauncher.launch(arrayOf("application/json", "*/*")) },
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
@@ -124,6 +188,9 @@ private fun PortraitConfigLayout(
     onDeleteProfile: (ConnectionProfile) -> Unit,
     onSetActiveProfile: (ConnectionProfile) -> Unit,
     onTestConnection: (ConnectionProfile, (String?) -> Unit) -> Unit,
+    onClearSessionHistory: () -> Unit,
+    onExportSettings: () -> Unit,
+    onPickImportFile: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
     val sections = ConfigSection.entries
@@ -197,6 +264,9 @@ private fun PortraitConfigLayout(
             onDeleteProfile = onDeleteProfile,
             onSetActiveProfile = onSetActiveProfile,
             onTestConnection = onTestConnection,
+            onClearSessionHistory = onClearSessionHistory,
+            onExportSettings = onExportSettings,
+            onPickImportFile = onPickImportFile,
             modifier = Modifier.weight(1f).fillMaxWidth()
         )
     }
@@ -295,6 +365,9 @@ private fun ConfigContent(
     onDeleteProfile: (ConnectionProfile) -> Unit,
     onSetActiveProfile: (ConnectionProfile) -> Unit,
     onTestConnection: (ConnectionProfile, (String?) -> Unit) -> Unit,
+    onClearSessionHistory: () -> Unit,
+    onExportSettings: () -> Unit,
+    onPickImportFile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -332,7 +405,7 @@ private fun ConfigContent(
                     onTestConnection = onTestConnection
                 )
                 ConfigSection.FILE_NAMING  -> FileNamingSection(settings, onSettingsChange)
-                ConfigSection.GENERAL      -> GeneralSection(settings, onSettingsChange)
+                ConfigSection.GENERAL      -> GeneralSection(settings, onSettingsChange, onClearSessionHistory, onExportSettings, onPickImportFile)
                 ConfigSection.ABOUT        -> AboutSection()
             }
         }
@@ -782,6 +855,10 @@ private fun NamingFieldRow(
     onRemove: (() -> Unit)?
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // Local draft prevents DataStore round-trip lag from clobbering the cursor on each keystroke.
+    // Keyed on (number, field.type) so it resets if the field slot or type changes, but not on
+    // every DataStore emission caused by our own edits.
+    var customDraft by remember(number, field.type) { mutableStateOf(field.customValue) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -832,12 +909,15 @@ private fun NamingFieldRow(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
-                if (field.customValue.isEmpty()) {
+                if (customDraft.isEmpty()) {
                     Text("Enter text...", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
                 }
                 BasicTextField(
-                    value = field.customValue,
-                    onValueChange = onCustomValueChange,
+                    value = customDraft,
+                    onValueChange = { newVal ->
+                        customDraft = newVal
+                        onCustomValueChange(newVal)
+                    },
                     textStyle = TextStyle(color = LocalAppColors.current.textPrimary, fontSize = 9.sp),
                     cursorBrush = SolidColor(LocalAppColors.current.blue),
                     singleLine = true,
@@ -864,7 +944,13 @@ private fun NamingFieldRow(
 // ── Section: General ─────────────────────────────────────────────────────────
 
 @Composable
-private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+private fun GeneralSection(
+    settings: AppSettings,
+    onChange: (AppSettings) -> Unit,
+    onClearSessionHistory: () -> Unit,
+    onExportSettings: () -> Unit,
+    onPickImportFile: () -> Unit
+) {
     SectionLabel("FILE TRANSFER")
     ConfigToggleRow("Auto Retry", settings.autoRetryEnabled) {
         onChange(settings.copy(autoRetryEnabled = !settings.autoRetryEnabled))
@@ -902,6 +988,57 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
         options  = historyLabels,
         onSelect = { onChange(settings.copy(sessionHistoryMax = historyOptions[it].first)) }
     )
+    Spacer(Modifier.height(6.dp))
+    var showClearSessionsDialog by remember { mutableStateOf(false) }
+    var sessionsCleared by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .border(1.dp, if (sessionsCleared) LocalAppColors.current.green else LocalAppColors.current.border)
+            .clickable { if (!sessionsCleared) showClearSessionsDialog = true }
+            .padding(horizontal = 14.dp, vertical = 5.dp)
+    ) {
+        Text(
+            if (sessionsCleared) "✓ SESSIONS CLEARED" else "CLEAR SESSION HISTORY",
+            color = if (sessionsCleared) LocalAppColors.current.green else LocalAppColors.current.textSecondary,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+    if (showClearSessionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearSessionsDialog = false },
+            containerColor = LocalAppColors.current.surface,
+            titleContentColor = LocalAppColors.current.textPrimary,
+            title = { Text("Clear Session History?", fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("WILL BE DELETED:", color = LocalAppColors.current.warning, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· All completed sessions", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Associated image records", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text("WILL NOT BE DELETED:", color = LocalAppColors.current.green, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text("· Active session", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Image files on device", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· Connection profiles", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                    Text("· App settings", color = LocalAppColors.current.textSecondary, fontSize = 9.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClearSessionHistory()
+                    showClearSessionsDialog = false
+                    sessionsCleared = true
+                }) {
+                    Text("CLEAR HISTORY", color = LocalAppColors.current.warning, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearSessionsDialog = false }) {
+                    Text("CANCEL", color = LocalAppColors.current.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
     Spacer(Modifier.height(10.dp))
     SectionLabel("PHOTO BACKUP")
     ConfigToggleRow("Save backup to phone", settings.saveBackupToPhone) {
@@ -1001,12 +1138,58 @@ private fun GeneralSection(settings: AppSettings, onChange: (AppSettings) -> Uni
     }
     InfoRow("Log Location", "PhotoFlow/Pipeline")
     Spacer(Modifier.height(10.dp))
+    SectionLabel("IMPORT / EXPORT")
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, LocalAppColors.current.border)
+            .clickable { onExportSettings() }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                "EXPORT SETTINGS",
+                color = LocalAppColors.current.blue,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+            Text(
+                "Saves all settings and connection profiles to a JSON file in Downloads",
+                color = LocalAppColors.current.textDisabled,
+                fontSize = 8.sp
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, LocalAppColors.current.border)
+            .clickable { onPickImportFile() }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                "IMPORT SETTINGS",
+                color = LocalAppColors.current.textSecondary,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+            Text(
+                "Select a PhotoFlow settings file — overwrites current settings and connections",
+                color = LocalAppColors.current.textDisabled,
+                fontSize = 8.sp
+            )
+        }
+    }
+    Spacer(Modifier.height(10.dp))
     SectionLabel("APP INFO")
-    InfoRow("Version",    "1.0.0-dev")
-    InfoRow("Build",      "2026-04-20")
+    InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    InfoRow("Built",   BuildConfig.BUILD_TIME)
     InfoRow("Min SDK",    "API 26")
     InfoRow("Target SDK", "API 34")
-    InfoRow("Build type", "Debug")
 }
 
 private fun formatStorageBytes(bytes: Long): String = when {
@@ -1052,9 +1235,8 @@ private fun AboutSection() {
     Spacer(Modifier.height(6.dp))
     HorizontalDivider(color = LocalAppColors.current.border, thickness = 0.5.dp)
     Spacer(Modifier.height(6.dp))
-    InfoRow("Version",  "1.0.0-dev")
-    InfoRow("Build",    "001")
-    InfoRow("Released", "2026-04-20")
+    InfoRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+    InfoRow("Built",   BuildConfig.BUILD_TIME)
     Spacer(Modifier.height(8.dp))
     Text("© 2026 PhotoFlow", color = LocalAppColors.current.textDisabled, fontSize = 9.sp)
 }
