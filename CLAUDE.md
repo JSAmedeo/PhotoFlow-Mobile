@@ -38,7 +38,7 @@ Primary goals:
 - Start/join barcode-based sessions
 - Capture images with the device camera (Native Camera mode) or receive from tethered DSLR
 - Display recent session images as thumbnails with renamed filenames
-- Upload images in the background via FTP
+- Upload images in the background via FTP (implemented) and cloud API (in development — branch `feature/cloud-api-upload`)
 - Expose transfer queue and retry state
 - Keep critical operational/system status visible at all times
 
@@ -128,20 +128,26 @@ The UI should feel like a professional field operations console, not a consumer 
 
 ### ConfigScreen
 - Left nav rail + right scrollable content
-- Sections (in order): GENERAL, DEVICE MODE, CONNECTIONS, FILE NAMING, ABOUT
+- Sections (in order): DEVICE MODE, GENERAL, CONNECTIONS, FILE NAMING, ABOUT
 - GENERAL section contains: FILE TRANSFER (auto-retry toggle/interval/max), SESSION HISTORY
   (max history dropdown: 10/25/50/100/200/Unlimited, default 50; CLEAR SESSION HISTORY button
   with confirmation dialog — deletes all completed sessions and their `session_images` rows
   from Room via `ConfigViewModel.clearSessionHistory()`; preserves the active session and
   physical image files on disk), PHOTO BACKUP (save to Pictures/PhotoFlow toggle; auto-delete
   backups toggle + age dropdown), STORAGE (real StatFs available space; Clear App Cache with
-  confirmation dialog), DIAGNOSTICS, APP INFO
-- All settings read/written via DataStore Preferences through ConfigViewModel
-- SAVE CONFIGURATION button persists draft to DataStore; shows ✓ SAVED flash on success
+  confirmation dialog), LOGS (enable/disable logging toggle), IMPORT / EXPORT (export all
+  settings + connection profiles to a timestamped JSON in Downloads; import via file picker
+  — replaces DataStore settings and all Room ConnectionProfile rows atomically), APP INFO
+- All settings are auto-saved to DataStore on change (no explicit SAVE button)
 - Device Mode selection (Tethered DSLR / Native Camera) propagates to MainScreen in real time
 - DEVICE MODE section contains three groups: device mode cards (Tethered/Native), DISPLAY MODE
   (dark mode toggle — immediately reflected system-wide via `MainViewModel.darkMode` StateFlow),
-  and ORIENTATION LOCK (enabled toggle + lock-to dropdown: Landscape / Portrait / Sensor)
+  and ORIENTATION LOCK (enabled toggle + lock-to dropdown: Landscape / Landscape 180 / Portrait
+  / Portrait 180)
+- `SettingsTransferResult` sealed class in `ConfigViewModel.kt` drives result dialog shown at
+  `ConfigScreen` level: `ExportSuccess(displayPath)`, `ImportSuccess`, `Error(message)`
+- `ConfigViewModel.exportSettings(context)` and `importSettings(context, uri)` run on
+  `Dispatchers.IO`; use `org.json.JSONObject` (built-in Android, no new dependency)
 
 ## Navigation
 - Jetpack Navigation Compose
@@ -421,19 +427,19 @@ Four fixes are in place:
 - deviceMode (DeviceMode enum)
 - darkMode (Boolean, default true) — drives `PhotoFlowMobileTheme` and status bar appearance
 - orientationLockEnabled (Boolean, default false)
-- orientationLock (OrientationLock enum — LANDSCAPE / PORTRAIT / SENSOR)
-- autoReconnect, previewQuality, sessionTimeout
-- ftpHost, ftpPort, ftpUsername, ftpPassword, ftpRemotePath
+- orientationLock (OrientationLock enum — LANDSCAPE / LANDSCAPE_180 / PORTRAIT / PORTRAIT_180)
 - namingFields (List<NamingField>, pipe-delimited in DataStore)
 - namingSeparator, namingExtension
-- verboseLogging, saveCrashReports
+- loggingEnabled (Boolean, default true)
 - autoRetryEnabled (Boolean, default true)
 - autoRetryIntervalSeconds (Int, default 4)
 - autoRetryMaxCount (Int, default -1 = continuous)
 - sessionHistoryMax (Int, default 50; -1 = unlimited) — applied as SQL LIMIT in subquery
 - saveBackupToPhone (Boolean, default false) — copies to Pictures/PhotoFlow via MediaStore
 - autoDeleteBackups (Boolean, default false)
-- autoDeleteAfterDays (Int, default 7)
+- autoDeleteAfterDays (Int, default 30)
+
+FTP credentials are stored in `ConnectionProfile` (Room), NOT in AppSettings.
 
 ## UX priorities
 At a glance, the operator should always be able to tell:
@@ -470,3 +476,8 @@ At a glance, the operator should always be able to tell:
   takes 2–3 s to emit the first DB result; the StateFlow initial value is `false` (appears to have
   sessions) and the prompt will silently not fire. Always collect the flow with
   `.filter { it }.first()` to suspend until Room actually confirms the table is empty.
+- Do not bind a `BasicTextField` directly to a DataStore-backed StateFlow value — every keystroke
+  triggers a DataStore write → StateFlow emission → recomposition that overwrites the field value
+  and cursor position, causing skipped characters and cursor jumps. Always keep a local `var draft
+  by remember(key) { mutableStateOf(externalValue) }` as the source of truth for text inputs, and
+  call the persistence callback alongside the local update.

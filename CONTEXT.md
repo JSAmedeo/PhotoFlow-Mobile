@@ -1,4 +1,4 @@
-# PhotoFlow Mobile — Project Context
+﻿# PhotoFlow Mobile — Project Context
 
 ## Current status
 All three screens implemented and functional. **Tethered DSLR works end-to-end on the Canon EOS
@@ -16,8 +16,14 @@ Room DB is at schema version 5. Native camera capture has full pipeline logging
 
 **Splash screen** is implemented: `core-splashscreen` library provides an instant dark-background
 system splash before Compose renders; a `PhotoFlowSplash` composable then shows for 1.4 s with
-the app icon, "PhotoFlow Mobile" title, and "FIELD OPERATIONS" tagline before handing off to
-the NavGraph.
+the app icon and "PhotoFlow Mobile" title before handing off to the NavGraph.
+
+**Settings import/export** is implemented: ConfigViewModel serializes all DataStore settings and
+all Room ConnectionProfiles to a versioned JSON file written to Downloads. Import uses the system
+file picker and restores both atomically. Result shown in an AlertDialog.
+
+**Active git branch: `feature/cloud-api-upload`** — cloud API upload is the next feature under
+development. FTP upload remains the production path on `master`.
 
 ## Environment
 - Development machine: Windows 10
@@ -33,15 +39,15 @@ the NavGraph.
 # Build debug APK
 ./gradlew assembleDebug
 
-# Install to Samsung (wireless ADB)
+# Install to Samsung (wireless ADB) — APK filename includes build timestamp
 /c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
   -s adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp \
-  install -r app/build/outputs/apk/debug/app-debug.apk
+  install -r app/build/outputs/apk/debug/PhotoFlow-debug-<YYYYMMDD-HHmm>.apk
 
-# Install to Motorola G 2025 (USB ADB)
+# Install to Motorola G 2025 (wireless ADB — full serial required)
 /c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-ZY32L9TX7B \
-  install -r app/build/outputs/apk/debug/app-debug.apk
+  -s adb-ZY32L9TX7B-GrNvc4._adb-tls-connect._tcp \
+  install -r app/build/outputs/apk/debug/PhotoFlow-debug-<YYYYMMDD-HHmm>.apk
 
 # Watch PhotoFlow logs only — Samsung
 /c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
@@ -78,7 +84,7 @@ app/src/main/java/com/photoflowmobile/app/
 │   └── Color.kt / Theme.kt / Type.kt
 ├── viewmodel/
 │   ├── MainViewModel.kt             — Session, images, capture, tethered camera, connections
-│   ├── ConfigViewModel.kt           — AppSettings read/write
+│   ├── ConfigViewModel.kt           — AppSettings read/write; settings export/import (JSON + MediaStore); SettingsTransferResult sealed class
 │   └── ScanCardViewModel.kt         — Session creation / resume
 ├── data/
 │   ├── model/
@@ -91,7 +97,7 @@ app/src/main/java/com/photoflowmobile/app/
 │   │   ├── AppDatabase.kt           — Room database v5 (3 entities, migrations 1-5)
 │   │   ├── SessionDao.kt            — incl. SessionWithCount join query with SQL LIMIT subquery
 │   │   ├── SessionImageDao.kt       — incl. getTransferQueue(), getFailedImages(), getById()
-│   │   ├── ConnectionProfileDao.kt  — CRUD + clearAllActive()
+│   │   ├── ConnectionProfileDao.kt  — CRUD + clearAllActive() + deleteAll() (used by import)
 │   │   └── Converters.kt            — UploadState ↔ String
 │   ├── repository/
 │   │   └── SessionRepository.kt     — Sessions, images, transfer queue, getImageById()
@@ -178,6 +184,14 @@ app/src/main/java/com/photoflowmobile/app/
     exist, `TetheredPanel` overlays bold "START NEW SESSION / BEFORE TAKING PHOTO" text in
     warning color. Parameter `noSessionsExist: Boolean` is threaded MainScreen → CenterPanel /
     PortraitCenterArea → TetheredPanel. Disappears as soon as a session is created.
+23. **Settings import/export** — ConfigScreen GENERAL → IMPORT / EXPORT. Export writes a
+    versioned JSON to Downloads (MediaStore on API 29+, direct file on API 26–28); filename is
+    `PhotoFlow-settings-YYYYMMDD-HHmm.json`. Import uses `ActivityResultContracts.OpenDocument`
+    file picker; replaces DataStore settings and all Room ConnectionProfile rows atomically.
+    Result dialog shown at ConfigScreen level via `SettingsTransferResult` StateFlow.
+24. **Custom filename field cursor fix** — `NamingFieldRow` keeps `var customDraft by
+    remember(number, field.type)` as the local source of truth for the BasicTextField, preventing
+    the DataStore round-trip from overwriting the cursor position on each keystroke.
 
 ## Tethered DSLR — architecture, fragility, and what you must not break
 
@@ -278,12 +292,10 @@ VM scoping) are documented there with reproduction conditions.
   side. The diff-poll fallback is the designed safety net for exactly this case.
 
 ## Known gaps / next steps
-- **FTP server config** — Worker is wired and functional; needs a ConnectionProfile with valid
-  host/port/credentials configured in ConfigScreen → Connections for transfers to actually succeed.
+- **Cloud API upload** — Under active development on branch `feature/cloud-api-upload`. FTP
+  remains the production upload path on `master`.
 - **ML Kit barcode scanning** — Dependency in place; camera analysis use case not yet bound.
   Manual entry is the active path.
-- **Connection profile creation** — ConfigScreen FTP section writes flat DataStore fields.
-  ConnectionProfile Room entities must be created via ConfigScreen but the two are not yet unified.
 - **EXIF strip** — ISO/shutter/aperture values in review pane are hardcoded placeholders.
 - **Tethered detach cleanup** — Poll loop logs 10–15 s of failing commands after device unplug
   before teardown completes. Cosmetic; not data-damaging.
