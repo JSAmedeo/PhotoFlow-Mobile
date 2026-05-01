@@ -24,6 +24,11 @@ object SettingsKeys {
     val AUTO_DELETE_AFTER_DAYS    = intPreferencesKey("auto_delete_after_days")
     val ORIENTATION_LOCK_ENABLED  = booleanPreferencesKey("orientation_lock_enabled")
     val ORIENTATION_LOCK          = stringPreferencesKey("orientation_lock")
+    // Cloud API
+    val CLOUD_VENUE_ID            = intPreferencesKey("cloud_venue_id")
+    val CLOUD_DEVICE_DISPLAY_NAME = stringPreferencesKey("cloud_device_display_name")
+    val CLOUD_DEVICE_UUID         = stringPreferencesKey("cloud_device_uuid")
+    val CLOUD_DEVICE_ID           = intPreferencesKey("cloud_device_id")
 }
 
 fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
@@ -43,7 +48,11 @@ fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     autoDeleteAfterDays    = prefs[SettingsKeys.AUTO_DELETE_AFTER_DAYS]   ?: 30,
     orientationLockEnabled = prefs[SettingsKeys.ORIENTATION_LOCK_ENABLED] ?: false,
     orientationLock        = OrientationLock.entries.firstOrNull { it.name == prefs[SettingsKeys.ORIENTATION_LOCK] }
-                                 ?: OrientationLock.LANDSCAPE
+                                 ?: OrientationLock.LANDSCAPE,
+    cloudVenueId           = prefs[SettingsKeys.CLOUD_VENUE_ID]            ?: 1,
+    cloudDeviceDisplayName = prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] ?: "",
+    cloudDeviceUuid        = prefs[SettingsKeys.CLOUD_DEVICE_UUID]         ?: "",
+    cloudDeviceId          = prefs[SettingsKeys.CLOUD_DEVICE_ID]           ?: 0
 )
 
 fun AppSettings.toPreferences(prefs: MutablePreferences) {
@@ -62,4 +71,8 @@ fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.AUTO_DELETE_AFTER_DAYS]   = autoDeleteAfterDays
     prefs[SettingsKeys.ORIENTATION_LOCK_ENABLED] = orientationLockEnabled
     prefs[SettingsKeys.ORIENTATION_LOCK]         = orientationLock.name
+    prefs[SettingsKeys.CLOUD_VENUE_ID]            = cloudVenueId
+    prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] = cloudDeviceDisplayName
+    prefs[SettingsKeys.CLOUD_DEVICE_UUID]         = cloudDeviceUuid
+    prefs[SettingsKeys.CLOUD_DEVICE_ID]           = cloudDeviceId
 }

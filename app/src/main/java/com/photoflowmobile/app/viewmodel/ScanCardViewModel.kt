@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.model.Session
+import com.photoflowmobile.app.data.model.SessionKeyType
 import com.photoflowmobile.app.data.repository.SessionRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -31,7 +32,12 @@ class ScanCardViewModel(application: Application) : AndroidViewModel(application
                 // Close all active sessions and create a new one
                 allSessions.filter { it.status == "active" }
                     .forEach { repository.updateSession(it.copy(status = "complete", endTime = System.currentTimeMillis())) }
-                repository.createSession(Session(barcode = barcode, startTime = System.currentTimeMillis(), status = "active"))
+                repository.createSession(Session(
+                    barcode = barcode,
+                    startTime = System.currentTimeMillis(),
+                    status = "active",
+                    sessionKeyType = SessionKeyType.BARCODE.apiValue
+                ))
             }
             onComplete()
         }

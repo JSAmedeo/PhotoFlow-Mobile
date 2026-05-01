@@ -26,22 +26,33 @@ import com.photoflowmobile.app.data.usb.TetheredState
 import com.photoflowmobile.app.data.model.Session
 import com.photoflowmobile.app.data.model.SessionImage
 import com.photoflowmobile.app.data.model.UploadState
+import com.photoflowmobile.app.data.model.buildCaptureCode
 import com.photoflowmobile.app.data.model.buildFilename
+import com.photoflowmobile.app.data.model.sessionKey
+import com.photoflowmobile.app.data.cloud.CloudApiClient
+import com.photoflowmobile.app.data.cloud.CloudDeviceService
+import com.photoflowmobile.app.data.datastore.SettingsKeys
+import com.photoflowmobile.app.data.model.ConnectionType
 import com.photoflowmobile.app.data.repository.SessionRepository
 import com.photoflowmobile.app.data.usb.MtpCameraManager
 import com.photoflowmobile.app.data.usb.TetheredStatus
+import com.photoflowmobile.app.data.worker.CloudUploadWorker
 import com.photoflowmobile.app.data.worker.FtpUploadWorker
 import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -200,8 +211,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
         val existingCount = repository.getImagesForSession(session.id).first().size
-        val renamedFilename = buildFilename(settings, session.barcode, existingCount + 1)
-        pipelineLog("[IMAGE] renamed: $cameraFilename → $renamedFilename")
+        val sequenceNumber = existingCount + 1
+        val renamedFilename = buildFilename(settings, session.barcode, sequenceNumber)
+        val captureCode = buildCaptureCode(session, sequenceNumber)
+        pipelineLog("[IMAGE] renamed: $cameraFilename → $renamedFilename (session=${session.sessionKey} seq=$sequenceNumber captureCode=$captureCode)")
 
         val outputDir  = File(context.filesDir, "captures").also { it.mkdirs() }
         val outputFile = File(outputDir, renamedFilename)
@@ -216,11 +229,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val imageId = try {
             repository.saveImage(
                 SessionImage(
-                    sessionId   = session.id,
-                    filename    = renamedFilename,
-                    localPath   = outputFile.absolutePath,
-                    timestamp   = System.currentTimeMillis(),
-                    uploadState = UploadState.PENDING
+                    sessionId       = session.id,
+                    filename        = renamedFilename,
+                    localPath       = outputFile.absolutePath,
+                    timestamp       = System.currentTimeMillis(),
+                    uploadState     = UploadState.PENDING,
+                    captureCode     = captureCode,
+                    captureSequence = sequenceNumber,
+                    sortOrder       = sequenceNumber
                 )
             )
         } catch (e: Exception) {
@@ -228,14 +244,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         try {
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "ftp_upload_$imageId",
-                ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
-                    .build()
-            )
-            pipelineLog("[UPLOAD] queued: $renamedFilename (id=$imageId)")
+            enqueueUpload(imageId, renamedFilename)
         } catch (e: Exception) {
             Log.e(PIPELINE_TAG, "[UPLOAD] enqueue failed: $renamedFilename id=$imageId", e)
         }
@@ -306,6 +315,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PIPELINE_TAG = "PhotoFlow/Pipeline"
     }
 
+    // ── Upload dispatch ───────────────────────────────────────────────────────
+
+    private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest =
+        when (activeConnection.value?.connectionType) {
+            ConnectionType.CLOUD_API ->
+                OneTimeWorkRequestBuilder<CloudUploadWorker>()
+                    .setInputData(workDataOf(CloudUploadWorker.KEY_IMAGE_ID to imageId))
+                    .build()
+            else ->
+                OneTimeWorkRequestBuilder<FtpUploadWorker>()
+                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
+                    .build()
+        }
+
+    private fun enqueueUpload(imageId: Long, imageName: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
+        val context = getApplication<Application>()
+        val via = activeConnection.value?.connectionType?.badge ?: "FTP"
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "upload_$imageId", policy, buildUploadRequest(imageId)
+        )
+        pipelineLog("[UPLOAD] queued: $imageName (id=$imageId) via $via")
+    }
+
+    // ── Cloud device registration ─────────────────────────────────────────────
+
+    private fun registerCloudDeviceIfNeeded(baseUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
+            if (settings.cloudDeviceId != 0) return@launch   // already registered
+
+            val uuid = settings.cloudDeviceUuid.ifBlank { UUID.randomUUID().toString() }
+            val displayName = settings.cloudDeviceDisplayName.ifBlank { "PhotoFlow Device" }
+            pipelineLog("[CLOUD] registering device uuid=$uuid venue=${settings.cloudVenueId}")
+            try {
+                val device = CloudDeviceService.register(
+                    CloudApiClient(baseUrl), settings.cloudVenueId, uuid, displayName
+                )
+                if (device != null) {
+                    dataStore.edit { prefs ->
+                        prefs[SettingsKeys.CLOUD_DEVICE_UUID] = device.deviceUuid
+                        prefs[SettingsKeys.CLOUD_DEVICE_ID]   = device.deviceId
+                    }
+                    pipelineLog("[CLOUD] registered device_id=${device.deviceId}")
+                } else {
+                    pipelineLog("[CLOUD] registration failed — no device returned")
+                }
+            } catch (e: Exception) {
+                pipelineLog("[CLOUD] registration error: ${e.message}")
+            }
+        }
+    }
+
     // ── Auto-retry loop ───────────────────────────────────────────────────────
 
     private fun startAutoRetryLoop() {
@@ -313,20 +374,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             while (true) {
                 val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
                 if (settings.autoRetryEnabled) {
-                    val context = getApplication<Application>()
                     repository.getFailedImages().first().forEach { image ->
                         val withinLimit = settings.autoRetryMaxCount == -1 ||
                                 image.retryCount < settings.autoRetryMaxCount
                         if (withinLimit) {
                             // Increment retry count only — keep FAILED state and error message visible
                             repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
-                            WorkManager.getInstance(context).enqueueUniqueWork(
-                                "ftp_upload_${image.id}",
-                                ExistingWorkPolicy.REPLACE,
-                                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to image.id))
-                                    .build()
-                            )
+                            enqueueUpload(image.id, image.filename, ExistingWorkPolicy.REPLACE)
                             pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
                         }
                     }
@@ -404,9 +458,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val wm = WorkManager.getInstance(context)
-
             // Reset any items that were mid-upload when the app was killed
             repository.getTransferQueue().first()
                 .filter { it.uploadState == UploadState.UPLOADING }
@@ -414,13 +465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // Re-enqueue pending uploads from before the restart
             repository.getPendingUploads().first().forEach { image ->
-                wm.enqueueUniqueWork(
-                    "ftp_upload_${image.id}",
-                    ExistingWorkPolicy.KEEP,
-                    OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                        .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to image.id))
-                        .build()
-                )
+                enqueueUpload(image.id, image.filename)
             }
         }
 
@@ -436,6 +481,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .filter { it == DeviceMode.TETHERED_DSLR }
                 .collect { mtpCameraManager.resetAndRescan() }
         }
+
+        // Auto-register with cloud API when a CLOUD_API profile becomes active and device is not yet registered
+        viewModelScope.launch {
+            activeConnection
+                .filterNotNull()
+                .filter { it.connectionType == ConnectionType.CLOUD_API }
+                .distinctUntilChanged { a, b -> a.host == b.host }
+                .collect { profile -> registerCloudDeviceIfNeeded(profile.host) }
+        }
     }
 
     // ── Actions ───────────────────────────────────────────────────────────────
@@ -448,13 +502,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val image = repository.getImageById(imageId) ?: return@launch
             repository.updateImageState(image.copy(uploadState = UploadState.PENDING, retryCount = 0, errorMessage = null))
-            WorkManager.getInstance(getApplication<Application>()).enqueueUniqueWork(
-                "ftp_upload_$imageId",
-                ExistingWorkPolicy.REPLACE,
-                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
-                    .build()
-            )
+            enqueueUpload(imageId, image.filename, ExistingWorkPolicy.REPLACE)
         }
     }
 
@@ -476,13 +524,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             val existingCount = repository.getImagesForSession(sessionId).first().size
-            val renamedFilename = buildFilename(settings, session.barcode, existingCount + 1)
+            val sequenceNumber = existingCount + 1
+            val renamedFilename = buildFilename(settings, session.barcode, sequenceNumber)
+            val captureCode = buildCaptureCode(session, sequenceNumber)
 
             val outputDir  = File(context.filesDir, "captures").also { it.mkdirs() }
             val outputFile = File(outputDir, renamedFilename)
             val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
 
-            Log.d(PIPELINE_TAG, "capture: firing filename=$renamedFilename session=${session.barcode}")
+            Log.d(PIPELINE_TAG, "capture: firing filename=$renamedFilename session=${session.sessionKey} seq=$sequenceNumber captureCode=$captureCode")
             imageCapture.takePicture(
                 outputOptions,
                 ContextCompat.getMainExecutor(context),
@@ -492,21 +542,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             saveBackupIfEnabled(renamedFilename, outputFile)
                             val imageId = repository.saveImage(
                                 SessionImage(
-                                    sessionId   = sessionId,
-                                    filename    = renamedFilename,
-                                    localPath   = outputFile.absolutePath,
-                                    timestamp   = System.currentTimeMillis(),
-                                    uploadState = UploadState.PENDING
+                                    sessionId       = sessionId,
+                                    filename        = renamedFilename,
+                                    localPath       = outputFile.absolutePath,
+                                    timestamp       = System.currentTimeMillis(),
+                                    uploadState     = UploadState.PENDING,
+                                    captureCode     = captureCode,
+                                    captureSequence = sequenceNumber,
+                                    sortOrder       = sequenceNumber
                                 )
                             )
                             Log.d(PIPELINE_TAG, "capture: saved imageId=$imageId filename=$renamedFilename")
-                            WorkManager.getInstance(context).enqueueUniqueWork(
-                                "ftp_upload_$imageId",
-                                ExistingWorkPolicy.KEEP,
-                                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
-                                    .build()
-                            )
+                            enqueueUpload(imageId, renamedFilename)
                         }
                     }
                     override fun onError(exception: ImageCaptureException) {

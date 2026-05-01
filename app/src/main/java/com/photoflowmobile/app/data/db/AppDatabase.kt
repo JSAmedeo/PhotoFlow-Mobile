@@ -35,9 +35,30 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE session_images ADD COLUMN cloudPhotoUid TEXT")
+    }
+}
+
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // sessions — venue/session-key model fields
+        db.execSQL("ALTER TABLE sessions ADD COLUMN sessionKeyType TEXT NOT NULL DEFAULT 'barcode'")
+        db.execSQL("ALTER TABLE sessions ADD COLUMN displayLabel TEXT")
+        db.execSQL("ALTER TABLE sessions ADD COLUMN cloudSessionId INTEGER")
+        // session_images — cloud identifiers + capture metadata
+        db.execSQL("ALTER TABLE session_images ADD COLUMN cloudPhotoId INTEGER")
+        db.execSQL("ALTER TABLE session_images ADD COLUMN cloudUploadedAt INTEGER")
+        db.execSQL("ALTER TABLE session_images ADD COLUMN captureCode TEXT")
+        db.execSQL("ALTER TABLE session_images ADD COLUMN captureSequence INTEGER")
+        db.execSQL("ALTER TABLE session_images ADD COLUMN sortOrder INTEGER")
+    }
+}
+
 @Database(
     entities = [Session::class, SessionImage::class, ConnectionProfile::class],
-    version = 5,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

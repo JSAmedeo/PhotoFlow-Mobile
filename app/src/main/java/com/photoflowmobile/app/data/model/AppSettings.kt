@@ -32,7 +32,12 @@ data class AppSettings(
     val autoDeleteBackups: Boolean = false,
     val autoDeleteAfterDays: Int = 30,
     val orientationLockEnabled: Boolean = false,
-    val orientationLock: OrientationLock = OrientationLock.LANDSCAPE
+    val orientationLock: OrientationLock = OrientationLock.LANDSCAPE,
+    // Cloud API
+    val cloudVenueId: Int = 1,
+    val cloudDeviceDisplayName: String = "",
+    val cloudDeviceUuid: String = "",
+    val cloudDeviceId: Int = 0          // 0 = not yet registered
 )
 
 fun defaultNamingFields(): List<NamingField> = listOf(

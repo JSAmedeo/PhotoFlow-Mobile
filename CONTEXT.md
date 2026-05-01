@@ -22,8 +22,7 @@ the app icon and "PhotoFlow Mobile" title before handing off to the NavGraph.
 all Room ConnectionProfiles to a versioned JSON file written to Downloads. Import uses the system
 file picker and restores both atomically. Result shown in an AlertDialog.
 
-**Active git branch: `feature/cloud-api-upload`** — cloud API upload is the next feature under
-development. FTP upload remains the production path on `master`.
+**Active git branch: `feature/cloud-api-upload`** — cloud API upload is the next feature under development. FTP upload remains the production path on `master`.
 
 ## Environment
 - Development machine: Windows 10
