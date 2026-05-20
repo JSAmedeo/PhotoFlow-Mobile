@@ -48,6 +48,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.window.Dialog
@@ -262,7 +263,7 @@ private fun TopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(LocalAppColors.current.surface)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
@@ -278,29 +279,29 @@ private fun TopBar(
                 color = LocalAppColors.current.textPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp
+                letterSpacing = 1.sp
             )
             Text(
                 " MOBILE",
                 color = LocalAppColors.current.blue,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp
+                letterSpacing = 1.sp
             )
         }
         Spacer(Modifier.weight(1f))
         WifiSsidChip()
-        Spacer(Modifier.width(5.dp))
+        Spacer(Modifier.width(6.dp))
         FileTransfersButton(transferQueue = transferQueue, onRetry = onRetry)
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(10.dp))
         Icon(
             Icons.Default.Menu,
             contentDescription = null,
             tint = LocalAppColors.current.textSecondary,
-            modifier = Modifier.size(16.dp).clickable { onMenuClick() }
+            modifier = Modifier.size(18.dp).clickable { onMenuClick() }
         )
     }
-    HorizontalDivider(color = LocalAppColors.current.border, thickness = 1.dp)
+    HorizontalDivider(color = LocalAppColors.current.border, thickness = 0.5.dp)
 }
 
 @Composable
@@ -379,17 +380,19 @@ private fun LeftPanel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(36.dp)
-                .border(1.dp, LocalAppColors.current.border)
+                .height(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(LocalAppColors.current.green.copy(alpha = 0.12f))
+                .border(1.dp, LocalAppColors.current.green.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "+ NEW SESSION",
-                color = LocalAppColors.current.textPrimary,
+                color = LocalAppColors.current.green,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp,
+                letterSpacing = 0.8.sp,
                 textAlign = TextAlign.Center
             )
         }
@@ -438,10 +441,12 @@ private fun ThumbnailCell(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
+                .clip(RoundedCornerShape(5.dp))
                 .background(LocalAppColors.current.surfaceRaised)
                 .border(
-                    width = if (active) 1.dp else 0.5.dp,
-                    color = if (active) LocalAppColors.current.borderActive else LocalAppColors.current.border
+                    width = if (active) 1.5.dp else 0.5.dp,
+                    color = if (active) LocalAppColors.current.green else LocalAppColors.current.border,
+                    shape = RoundedCornerShape(5.dp)
                 )
         ) {
             AsyncImage(
@@ -455,6 +460,7 @@ private fun ThumbnailCell(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(3.dp)
+                        .clip(RoundedCornerShape(3.dp))
                         .background(LocalAppColors.current.green.copy(alpha = 0.90f))
                         .size(16.dp),
                     contentAlignment = Alignment.Center
@@ -492,9 +498,9 @@ private fun CenterPanel(
 ) {
     Box(
         modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
             .background(LocalAppColors.current.surface)
-            .border(1.dp, LocalAppColors.current.border)
-            .clip(RectangleShape)
+            .border(0.5.dp, LocalAppColors.current.border, RoundedCornerShape(10.dp))
     ) {
         if (deviceMode == DeviceMode.TETHERED_DSLR) {
             TetheredPanel(
@@ -526,7 +532,7 @@ private fun CenterPanel(
                             letterSpacing = 1.sp
                         )
                     }
-                    val canvasBorder = LocalAppColors.current.border
+                    val canvasBracket = LocalAppColors.current.green
                     Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                         val stroke = 1.5.dp.toPx()
                         val corner = 14.dp.toPx()
@@ -542,12 +548,12 @@ private fun CenterPanel(
                             Offset(w, h - corner) to Offset(w, h),
                             Offset(w, h) to Offset(w - corner, h),
                         ).forEach { (start, end) ->
-                            drawLine(canvasBorder.copy(alpha = 0.7f), start, end, strokeWidth = stroke)
+                            drawLine(canvasBracket.copy(alpha = 0.55f), start, end, strokeWidth = stroke)
                         }
                         // centre focus point
                         val fp = 9.dp.toPx()
                         drawRect(
-                            color = canvasBorder.copy(alpha = 0.6f),
+                            color = canvasBracket.copy(alpha = 0.45f),
                             topLeft = Offset(w / 2f - fp, h / 2f - fp),
                             size = Size(fp * 2, fp * 2),
                             style = Stroke(width = stroke)
@@ -593,8 +599,9 @@ private fun CenterPanel(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
-                                .border(1.dp, LocalAppColors.current.border)
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(LocalAppColors.current.surfaceRaised)
+                                .border(0.5.dp, LocalAppColors.current.border, RoundedCornerShape(6.dp))
                                 .clickable(enabled = latestImage != null) { showFullscreenLandscape = true }
                         ) {
                             if (latestImage != null) {
@@ -620,16 +627,17 @@ private fun CenterPanel(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, LocalAppColors.current.blue)
-                                .background(LocalAppColors.current.blue.copy(alpha = 0.10f))
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(LocalAppColors.current.blue.copy(alpha = 0.16f))
+                                .border(1.dp, LocalAppColors.current.blue.copy(alpha = 0.70f), RoundedCornerShape(10.dp))
                                 .clickable { onCapture() }
-                                .padding(vertical = 8.dp),
+                                .padding(vertical = 10.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 "◉  CAPTURE",
                                 color = LocalAppColors.current.blue,
-                                fontSize = 12.sp,
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.5.sp
                             )
@@ -661,7 +669,7 @@ private fun TetheredPanel(
         }
 
         // Corner bracket overlay
-        val canvasBorder = LocalAppColors.current.border
+        val canvasBracket = LocalAppColors.current.green
         Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
             val stroke = 1.5.dp.toPx()
             val corner = 14.dp.toPx()
@@ -671,7 +679,7 @@ private fun TetheredPanel(
                 Offset(w - corner, 0f) to Offset(w, 0f), Offset(w, 0f) to Offset(w, corner),
                 Offset(0f, h - corner) to Offset(0f, h), Offset(0f, h) to Offset(corner, h),
                 Offset(w, h - corner) to Offset(w, h), Offset(w, h) to Offset(w - corner, h),
-            ).forEach { (s, e) -> drawLine(canvasBorder.copy(alpha = 0.6f), s, e, strokeWidth = stroke) }
+            ).forEach { (s, e) -> drawLine(canvasBracket.copy(alpha = 0.5f), s, e, strokeWidth = stroke) }
         }
 
         // Status row — top-left
@@ -888,10 +896,14 @@ private fun SessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, if (isSelected) LocalAppColors.current.borderActive else LocalAppColors.current.border)
+            .clip(RoundedCornerShape(7.dp))
             .background(if (isSelected) LocalAppColors.current.surfaceRaised else Color.Transparent)
+            .then(
+                if (isSelected) Modifier.border(1.dp, LocalAppColors.current.green.copy(alpha = 0.40f), RoundedCornerShape(7.dp))
+                else Modifier
+            )
             .clickable { onClick() }
-            .padding(horizontal = 5.dp, vertical = 3.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -1010,10 +1022,11 @@ private fun ConnectionSelector(
         Box {
             Row(
                 modifier = Modifier
-                    .border(1.dp, LocalAppColors.current.border)
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, LocalAppColors.current.border, RoundedCornerShape(6.dp))
                     .background(LocalAppColors.current.surfaceRaised)
                     .clickable { expanded = true }
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
@@ -1092,17 +1105,32 @@ private fun FileTransfersButton(
 
     Row(
         modifier = Modifier
-            .border(1.dp, LocalAppColors.current.border)
-            .background(LocalAppColors.current.surfaceRaised)
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                if (hasErrors) LocalAppColors.current.warning.copy(alpha = 0.12f)
+                else LocalAppColors.current.surfaceRaised
+            )
+            .border(
+                1.dp,
+                if (hasErrors) LocalAppColors.current.warning.copy(alpha = 0.55f)
+                else LocalAppColors.current.border,
+                RoundedCornerShape(6.dp)
+            )
             .clickable { showPanel = true }
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        if (hasErrors) {
-            StatusDot(color = LocalAppColors.current.warning)
-        }
-        Text("File Transfers", color = LocalAppColors.current.textPrimary, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        StatusDot(
+            color = if (hasErrors) LocalAppColors.current.warning else LocalAppColors.current.green,
+            size = 5.dp
+        )
+        Text(
+            "File Transfers",
+            color = if (hasErrors) LocalAppColors.current.warning else LocalAppColors.current.textPrimary,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 
     if (showPanel) {
@@ -1114,9 +1142,10 @@ private fun FileTransfersButton(
                 modifier = Modifier
                     .fillMaxWidth(0.72f)
                     .fillMaxHeight(0.68f)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(LocalAppColors.current.surface)
-                    .border(1.dp, LocalAppColors.current.border)
-                    .padding(12.dp)
+                    .border(0.5.dp, LocalAppColors.current.border, RoundedCornerShape(12.dp))
+                    .padding(14.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1213,10 +1242,10 @@ private fun TransferPanelRow(
             )
         }
         val (badgeText, badgeColor) = when (image.uploadState) {
-            UploadState.PENDING        -> "PENDING"    to LocalAppColors.current.textSecondary
-            UploadState.UPLOADING      -> "↑ UP"       to LocalAppColors.current.blue
-            UploadState.UPLOADED       -> "✓"          to LocalAppColors.current.green
-            UploadState.FAILED         -> "FAILED"     to LocalAppColors.current.warning
+            UploadState.PENDING   -> "PENDING" to LocalAppColors.current.textSecondary
+            UploadState.UPLOADING -> "↑ UP"    to LocalAppColors.current.blue
+            UploadState.UPLOADED  -> "✓"       to LocalAppColors.current.green
+            UploadState.FAILED    -> "FAILED"  to LocalAppColors.current.warning
         }
         Text(
             badgeText,
@@ -1224,16 +1253,19 @@ private fun TransferPanelRow(
             fontSize = 8.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier
-                .border(0.5.dp, badgeColor.copy(alpha = 0.5f))
-                .padding(horizontal = 4.dp, vertical = 2.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(0.5.dp, badgeColor.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                .background(badgeColor.copy(alpha = 0.10f))
+                .padding(horizontal = 5.dp, vertical = 2.dp)
         )
         if (isFailed) {
             Box(
                 modifier = Modifier
-                    .border(1.dp, LocalAppColors.current.warning)
-                    .background(LocalAppColors.current.warning.copy(alpha = 0.1f))
+                    .clip(RoundedCornerShape(4.dp))
+                    .border(1.dp, LocalAppColors.current.warning.copy(alpha = 0.8f), RoundedCornerShape(4.dp))
+                    .background(LocalAppColors.current.warning.copy(alpha = 0.12f))
                     .clickable { onRetry() }
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
             ) {
                 Text("RETRY", color = LocalAppColors.current.warning, fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
@@ -1255,8 +1287,9 @@ private fun PortraitCenterArea(
 ) {
     Box(
         modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
             .background(LocalAppColors.current.surface)
-            .border(1.dp, LocalAppColors.current.border)
+            .border(0.5.dp, LocalAppColors.current.border, RoundedCornerShape(10.dp))
     ) {
         if (deviceMode == DeviceMode.TETHERED_DSLR) {
             TetheredPanel(modifier = Modifier.fillMaxSize(), status = tetheredStatus, latestImage = latestImage, noSessionsExist = noSessionsExist)
@@ -1414,25 +1447,28 @@ private fun PortraitSessionButtons(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(36.dp)
-                .border(1.dp, LocalAppColors.current.border)
+                .height(38.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(LocalAppColors.current.green.copy(alpha = 0.12f))
+                .border(1.dp, LocalAppColors.current.green.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "NEW SESSION",
-                color = LocalAppColors.current.textPrimary,
+                color = LocalAppColors.current.green,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp
+                letterSpacing = 0.8.sp
             )
         }
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(36.dp)
-                .border(1.dp, LocalAppColors.current.border)
+                .height(38.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(LocalAppColors.current.surfaceRaised)
+                .border(1.dp, LocalAppColors.current.border, RoundedCornerShape(8.dp))
                 .clickable { onShowHistory() },
             contentAlignment = Alignment.Center
         ) {
@@ -1526,11 +1562,13 @@ private fun PortraitThumbnail(
         modifier = Modifier
             .fillMaxHeight()
             .aspectRatio(1f)
-            .border(
-                width = if (active) 1.dp else 0.5.dp,
-                color = if (active) LocalAppColors.current.borderActive else LocalAppColors.current.border
-            )
+            .clip(RoundedCornerShape(5.dp))
             .background(LocalAppColors.current.surfaceRaised)
+            .border(
+                width = if (active) 1.5.dp else 0.5.dp,
+                color = if (active) LocalAppColors.current.green else LocalAppColors.current.border,
+                shape = RoundedCornerShape(5.dp)
+            )
             .clickable { onClick() }
     ) {
         AsyncImage(
@@ -1544,6 +1582,7 @@ private fun PortraitThumbnail(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(2.dp)
+                    .clip(RoundedCornerShape(3.dp))
                     .background(LocalAppColors.current.green.copy(alpha = 0.90f))
                     .size(14.dp),
                 contentAlignment = Alignment.Center
@@ -1656,9 +1695,10 @@ private fun SessionHistorySheet(
 private fun Chip(label: String, active: Boolean, color: Color = LocalAppColors.current.blue) {
     Box(
         modifier = Modifier
-            .border(1.dp, if (active) color else LocalAppColors.current.border)
-            .background(if (active) color.copy(alpha = 0.1f) else Color.Transparent)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, if (active) color.copy(alpha = 0.65f) else LocalAppColors.current.border, RoundedCornerShape(50))
+            .background(if (active) color.copy(alpha = 0.12f) else Color.Transparent)
+            .padding(horizontal = 9.dp, vertical = 3.dp)
     ) {
         Text(
             label,
@@ -1686,8 +1726,9 @@ private fun ReviewFullscreenDialog(image: SessionImage, onDismiss: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth(0.92f)
                     .fillMaxHeight(0.72f)
-                    .border(1.dp, LocalAppColors.current.borderActive)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(LocalAppColors.current.surface)
+                    .border(0.5.dp, LocalAppColors.current.borderActive, RoundedCornerShape(12.dp))
                     .clickable { onDismiss() }
             ) {
                 Row(
