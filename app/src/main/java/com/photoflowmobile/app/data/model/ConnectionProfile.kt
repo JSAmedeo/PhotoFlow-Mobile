@@ -4,7 +4,8 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class ConnectionType(val label: String, val badge: String) {
-    FTP("FTP Server", "FTP")
+    FTP("FTP Server", "FTP"),
+    CLOUD_API("PhotoFlow Cloud API", "CLOUD")
 }
 
 @Entity(tableName = "connection_profiles")
@@ -17,5 +18,6 @@ data class ConnectionProfile(
     val username: String = "",
     val password: String = "",
     val remotePath: String = "/",
+    val photoOp: String = "",
     val isActive: Boolean = false
 )

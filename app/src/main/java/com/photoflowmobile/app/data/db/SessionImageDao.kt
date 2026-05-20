@@ -22,6 +22,9 @@ interface SessionImageDao {
     @Query("SELECT * FROM session_images WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): SessionImage?
 
+    @Query("SELECT * FROM session_images WHERE uploadState = 'UPLOADED' ORDER BY id DESC LIMIT 1")
+    suspend fun getLastUploadedImage(): SessionImage?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(image: SessionImage): Long
 

@@ -38,7 +38,7 @@ Primary goals:
 - Start/join barcode-based sessions
 - Capture images with the device camera (Native Camera mode) or receive from tethered DSLR
 - Display recent session images as thumbnails with renamed filenames
-- Upload images in the background via FTP
+- Upload images in the background via FTP or Cloud API (both implemented; Cloud API is the active development path on branch `feature/cloud-api-upload`)
 - Expose transfer queue and retry state
 - Keep critical operational/system status visible at all times
 
@@ -103,10 +103,18 @@ The UI should feel like a professional field operations console, not a consumer 
   (Native Camera only), mode chip (Tethered Mode / Native Mode)
 - `BackHandler { activity.moveTaskToBack(true) }` — back press backgrounds the app instead of
   destroying the Activity, preserving the USB camera session
-- Camera capture: ImageCapture use case held in MainViewModel; fires CameraX takePicture(),
-  computes renamed filename from AppSettings naming fields, saves to filesDir/captures/,
-  inserts SessionImage (PENDING) into Room, enqueues FtpUploadWorker; logs
-  `capture: firing`, `capture: saved`, or `capture: FAILED code=N` to PhotoFlow/Pipeline tag
+- Camera capture: ImageCapture use case held in MainViewModel; fires CameraX takePicture()
+  to a temp file (`tmp_<timestamp>.jpg`), then under `captureMutex` reads the DB count,
+  assigns sequence number, renames the temp file to the final filename, and inserts
+  SessionImage (PENDING) into Room. Enqueues CloudUploadWorker or FtpUploadWorker depending
+  on active connection type. Logs `capture: firing`, `capture: saved`, or
+  `capture: FAILED code=N` to `PhotoFlow/Pipeline` tag.
+- **Sequence number race fix:** `captureMutex` (a `kotlinx.coroutines.sync.Mutex` in
+  `MainViewModel`) serialises the count-read → filename-build → file-rename → DB-insert
+  critical section for both native capture (`capturePhoto`) and tethered image receipt
+  (`handleTetheredImage`). Without the mutex, two rapid captures can read the same DB count
+  and receive the same sequence number. The temp-file approach allows CameraX's slow
+  hardware capture to happen outside the mutex — only the metadata assignment step is locked.
 - `reviewImage: StateFlow<SessionImage?>` in MainViewModel — resolves to the manually selected
   thumbnail (if set via `selectReviewImage()`) or `sessionImages.firstOrNull()`. Auto-clears
   to latest when the session changes or a new photo arrives (observer compares first-image ID)
@@ -128,20 +136,35 @@ The UI should feel like a professional field operations console, not a consumer 
 
 ### ConfigScreen
 - Left nav rail + right scrollable content
-- Sections (in order): GENERAL, DEVICE MODE, CONNECTIONS, FILE NAMING, ABOUT
+- Sections (in order): DEVICE MODE, GENERAL, CONNECTIONS, FILE NAMING, ABOUT
 - GENERAL section contains: FILE TRANSFER (auto-retry toggle/interval/max), SESSION HISTORY
   (max history dropdown: 10/25/50/100/200/Unlimited, default 50; CLEAR SESSION HISTORY button
   with confirmation dialog — deletes all completed sessions and their `session_images` rows
   from Room via `ConfigViewModel.clearSessionHistory()`; preserves the active session and
   physical image files on disk), PHOTO BACKUP (save to Pictures/PhotoFlow toggle; auto-delete
   backups toggle + age dropdown), STORAGE (real StatFs available space; Clear App Cache with
-  confirmation dialog), DIAGNOSTICS, APP INFO
-- All settings read/written via DataStore Preferences through ConfigViewModel
-- SAVE CONFIGURATION button persists draft to DataStore; shows ✓ SAVED flash on success
+  confirmation dialog), LOGS (enable/disable logging toggle), IMPORT / EXPORT (export all
+  settings + connection profiles to a timestamped JSON in Downloads; import via file picker
+  — replaces DataStore settings and all Room ConnectionProfile rows atomically), APP INFO
+- All settings are auto-saved to DataStore on change (no explicit SAVE button)
 - Device Mode selection (Tethered DSLR / Native Camera) propagates to MainScreen in real time
 - DEVICE MODE section contains three groups: device mode cards (Tethered/Native), DISPLAY MODE
   (dark mode toggle — immediately reflected system-wide via `MainViewModel.darkMode` StateFlow),
-  and ORIENTATION LOCK (enabled toggle + lock-to dropdown: Landscape / Portrait / Sensor)
+  and ORIENTATION LOCK (enabled toggle + lock-to dropdown: Landscape / Landscape 180 / Portrait
+  / Portrait 180)
+- `SettingsTransferResult` sealed class in `ConfigViewModel.kt` drives result dialog shown at
+  `ConfigScreen` level: `ExportSuccess(displayPath)`, `ImportSuccess`, `Error(message)`
+- `ConfigViewModel.exportSettings(context)` and `importSettings(context, uri)` run on
+  `Dispatchers.IO`; use `org.json.JSONObject` (built-in Android, no new dependency)
+- GENERAL section also contains a CLOUD API subsection with: Setup Code text field (sent to
+  `POST /devices/register-with-setup-code`), API Key field (masked by default; SHOW/HIDE toggle),
+  Station Name field, Device Display Name field, read-only Device UUID and Device ID rows,
+  read-only Venue ID and Venue Slug (shown only when non-blank/non-zero — returned by backend
+  after registration), REGISTER DEVICE button (calls `ConfigViewModel.registerDevice()`), and
+  FETCH MANIFEST button (shown only when an active session exists; calls `fetchManifest()`).
+  Registration state and manifest result are shown as inline status text below the buttons.
+  Error messages per contract: 401 → "check API key", 404 → "invalid setup code", blank
+  setup code → "Enter a Setup Code first".
 
 ## Navigation
 - Jetpack Navigation Compose
@@ -166,9 +189,10 @@ The UI should feel like a professional field operations console, not a consumer 
 ## Key libraries
 - CameraX 1.3.4 — camera preview (`PreviewView`) and capture (`ImageCapture`)
 - ML Kit 17.3.0 — barcode scanning (wired, not yet active in UI)
-- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 5
-- WorkManager 2.9.0 — FtpUploadWorker; always returns `Result.failure()` (no WorkManager
-  retry); ViewModel `startAutoRetryLoop()` handles background retry on configurable interval
+- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 8
+- WorkManager 2.9.0 — `FtpUploadWorker` and `CloudUploadWorker`; return `Result.success()` on
+  successful upload, `Result.failure()` on error (no WorkManager retry — ViewModel
+  `startAutoRetryLoop()` handles background retry on configurable interval)
 - Apache Commons Net 3.10.0 — FTP transfers; `connectTimeout = 5 s`, `dataTimeout = 15 s`;
   dynamic error messages include phone IP and server IP/port
 - DataStore Preferences 1.1.1 — AppSettings persistence
@@ -295,7 +319,7 @@ is declared in the manifest. Several system apps and potentially third-party tet
 (`com.android.mtp`, `com.google.android.apps.photos`, any installed camera tether app) are also
 registered for PTP class-6 devices and compete for the attach intent.
 
-Four fixes are in place:
+Six fixes are in place:
 
 1. **`onResume` rescan.** `MainActivity.onResume()` calls `mainViewModel.rescanUsbDevices()` →
    `MtpCameraManager.rescanForAttachedCamera()`, which re-scans `usbManager.deviceList` and
@@ -397,6 +421,9 @@ Four fixes are in place:
 - startTime — epoch ms
 - endTime — epoch ms, nullable
 - status — "active" | "complete"
+- sessionKeyType — "barcode" | "manual" | "custom" (added schema v7)
+- displayLabel — human-readable label sent to cloud backend (added schema v7)
+- cloudSessionId — backend session id returned from POST /sessions/upsert (added schema v7)
 
 ### SessionImage
 - id (autoGenerate)
@@ -405,8 +432,14 @@ Four fixes are in place:
 - localPath — absolute path on device
 - timestamp — epoch ms
 - uploadState — UploadState enum
-- errorMessage — nullable; set by FtpUploadWorker with human-readable error including IPs
+- errorMessage — nullable; set by upload worker with human-readable error
 - retryCount — Int, default 0; incremented by auto-retry loop (state stays FAILED during retry)
+- cloudPhotoUid — backend public photo identifier returned on upload (added schema v6/v7)
+- cloudPhotoId — backend internal numeric id, debug only (added schema v7)
+- cloudUploadedAt — epoch ms from backend `uploaded_at` timestamp (added schema v7)
+- captureCode — canonical code for barcode venues, e.g. "XYZ507665_01" (added schema v7)
+- captureSequence — ordinal within the session, 1-based (added schema v7)
+- sortOrder — ordering value; defaults to captureSequence (added schema v7)
 
 ### UploadState (enum)
 - PENDING, UPLOADING, UPLOADED, FAILED, RETRY_REQUIRED
@@ -414,26 +447,37 @@ Four fixes are in place:
 ### ConnectionProfile
 - id (autoGenerate)
 - name — display name (e.g. "P-SERVER-ALPHA")
+- connectionType — FTP | CLOUD_API
 - host, port, username, password, remotePath
+- photoOp — optional operation label (added schema v8, default "")
 - isActive — only one profile should be active at a time
 
 ### AppSettings (DataStore, not Room)
 - deviceMode (DeviceMode enum)
 - darkMode (Boolean, default true) — drives `PhotoFlowMobileTheme` and status bar appearance
 - orientationLockEnabled (Boolean, default false)
-- orientationLock (OrientationLock enum — LANDSCAPE / PORTRAIT / SENSOR)
-- autoReconnect, previewQuality, sessionTimeout
-- ftpHost, ftpPort, ftpUsername, ftpPassword, ftpRemotePath
+- orientationLock (OrientationLock enum — LANDSCAPE / LANDSCAPE_180 / PORTRAIT / PORTRAIT_180)
 - namingFields (List<NamingField>, pipe-delimited in DataStore)
 - namingSeparator, namingExtension
-- verboseLogging, saveCrashReports
+- loggingEnabled (Boolean, default true)
 - autoRetryEnabled (Boolean, default true)
 - autoRetryIntervalSeconds (Int, default 4)
 - autoRetryMaxCount (Int, default -1 = continuous)
 - sessionHistoryMax (Int, default 50; -1 = unlimited) — applied as SQL LIMIT in subquery
 - saveBackupToPhone (Boolean, default false) — copies to Pictures/PhotoFlow via MediaStore
 - autoDeleteBackups (Boolean, default false)
-- autoDeleteAfterDays (Int, default 7)
+- autoDeleteAfterDays (Int, default 30)
+- cloudSetupCode (String, default "") — venue setup code sent on `POST /devices/register-with-setup-code`
+- cloudVenueSlug (String, default "") — returned by backend after registration; persisted; not sent in requests
+- cloudVenueId (Int, default 0) — returned by backend after registration; 0 means not yet registered
+- cloudDeviceDisplayName (String, default "") — friendly name sent on registration
+- cloudDeviceUuid (String, default "") — stable UUID generated once, persisted before first API call
+- cloudDeviceId (Int, default 0) — backend device id returned after registration; 0 means not registered
+- cloudApiKey (String, default "") — staging API key sent as `X-PhotoFlow-Api-Key` header; omitted when blank
+- cloudStationName (String, default "") — optional station label sent with registration and photo uploads
+
+FTP credentials are stored in `ConnectionProfile` (Room), NOT in AppSettings.
+Cloud API key is stored in AppSettings (DataStore), NOT in ConnectionProfile.
 
 ## UX priorities
 At a glance, the operator should always be able to tell:
@@ -470,3 +514,30 @@ At a glance, the operator should always be able to tell:
   takes 2–3 s to emit the first DB result; the StateFlow initial value is `false` (appears to have
   sessions) and the prompt will silently not fire. Always collect the flow with
   `.filter { it }.first()` to suspend until Room actually confirms the table is empty.
+- Do not bind a `BasicTextField` directly to a DataStore-backed StateFlow value — every keystroke
+  triggers a DataStore write → StateFlow emission → recomposition that overwrites the field value
+  and cursor position, causing skipped characters and cursor jumps. Always keep a local `var draft
+  by remember(key) { mutableStateOf(externalValue) }` as the source of truth for text inputs, and
+  call the persistence callback alongside the local update.
+- Do not construct `CloudApiClient(host)` without passing the API key — use
+  `CloudApiClient(host, settings.cloudApiKey)`. The key is blank when not configured
+  (header is omitted), but the pattern must be consistent so staging auth works everywhere.
+- Do not send `cloudVenueId` to the backend when it is 0 — it means the device is not yet
+  registered. `fetchManifest()` guards on this with an early return.
+- Do not use `POST /devices/register` — the Phase 1 endpoint is `POST /devices/register-with-setup-code`
+  with a `setup_code` field (not `venue_slug`). `venue_slug` is returned in the response and persisted.
+- Do not reference `cloudVenueSlug` as the value sent for registration — it is persisted FROM the
+  response. The user-entered value sent TO the registration request is `cloudSetupCode`.
+- Do not use `photo_id` (numeric) in new code — always use `photo_uid` (the opaque public identifier
+  returned in upload responses) for photo retrieval via `GET /photos/{photo_uid}/file`.
+- Do not use `session_code` in new code — prefer `session_key` everywhere; `session_code` is a
+  compatibility alias only for reading backend response fields.
+- Do not assign sequence numbers outside `captureMutex` — the count-read and DB-insert must
+  be atomic or two rapid captures will receive the same sequence number.
+- Do not use `domain-config` in `network_security_config.xml` to allow cleartext HTTP to
+  IP addresses by subnet — Android does not support subnet notation there. The app uses
+  `<base-config cleartextTrafficPermitted="true">` since the backend URL is user-configured
+  and the LAN IP can change. This is a staging-only app.
+- Do not send a new `idempotency_key` on retry — always use `image.id.toString()` as the
+  stable key so the backend can deduplicate retries and return HTTP 200 with the same
+  `photo_uid` instead of creating a duplicate record.

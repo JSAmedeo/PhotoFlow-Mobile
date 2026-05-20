@@ -16,6 +16,9 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY startTime DESC")
     fun getAllSessions(): Flow<List<Session>>
 
+    @Query("SELECT * FROM sessions WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): Session?
+
     @Query(
         "SELECT s.*, " +
         "COUNT(si.id) as imageCount, " +

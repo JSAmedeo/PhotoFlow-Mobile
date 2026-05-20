@@ -96,8 +96,16 @@ class FtpUploadWorker(
                     ftp.enterLocalPassiveMode()
                     ftp.setFileType(FTP.BINARY_FILE_TYPE)
 
-                    val remotePath = profile.remotePath.trimEnd('/') + "/"
-                    ftp.changeWorkingDirectory(remotePath)
+                    val basePath = profile.remotePath.trimEnd('/') + "/"
+                    ftp.changeWorkingDirectory(basePath)
+
+                    if (profile.photoOp.isNotBlank()) {
+                        val subdir = profile.photoOp.trim('/')
+                        ftp.makeDirectory(subdir)
+                        if (!ftp.changeWorkingDirectory(subdir)) {
+                            throw Exception("Could not navigate to Photo Op subfolder \"$subdir\" on ${profile.host}")
+                        }
+                    }
 
                     FileInputStream(file).use { stream ->
                         if (!ftp.storeFile(image.filename, stream)) {
