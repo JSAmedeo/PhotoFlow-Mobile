@@ -31,6 +31,7 @@ import com.photoflowmobile.app.data.model.buildFilename
 import com.photoflowmobile.app.data.model.sessionKey
 import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudDeviceService
+import com.photoflowmobile.app.data.cloud.RegistrationResult
 import com.photoflowmobile.app.data.datastore.SettingsKeys
 import com.photoflowmobile.app.data.model.ConnectionType
 import com.photoflowmobile.app.data.repository.SessionRepository
@@ -44,11 +45,14 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.datastore.preferences.core.edit
+import com.photoflowmobile.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -210,39 +214,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
-        val existingCount = repository.getImagesForSession(session.id).first().size
-        val sequenceNumber = existingCount + 1
-        val renamedFilename = buildFilename(settings, session.barcode, sequenceNumber)
-        val captureCode = buildCaptureCode(session, sequenceNumber)
-        pipelineLog("[IMAGE] renamed: $cameraFilename → $renamedFilename (session=${session.sessionKey} seq=$sequenceNumber captureCode=$captureCode)")
+        val outputDir = File(context.filesDir, "captures").also { it.mkdirs() }
 
-        val outputDir  = File(context.filesDir, "captures").also { it.mkdirs() }
-        val outputFile = File(outputDir, renamedFilename)
-        try {
-            outputFile.writeBytes(data)
-        } catch (e: Exception) {
-            Log.e(PIPELINE_TAG, "[IMAGE] save failed: $renamedFilename", e)
-            return
-        }
-        saveBackupIfEnabled(renamedFilename, outputFile)
-
-        val imageId = try {
-            repository.saveImage(
-                SessionImage(
-                    sessionId       = session.id,
-                    filename        = renamedFilename,
-                    localPath       = outputFile.absolutePath,
-                    timestamp       = System.currentTimeMillis(),
-                    uploadState     = UploadState.PENDING,
-                    captureCode     = captureCode,
-                    captureSequence = sequenceNumber,
-                    sortOrder       = sequenceNumber
+        // Hold the mutex from count-read through DB insert so concurrent tethered arrivals
+        // never read the same count and collide on a sequence number.
+        val result = captureMutex.withLock {
+            val seq = repository.getImagesForSession(session.id).first().size + 1
+            val filename = buildFilename(settings, session.barcode, seq)
+            val captureCode = buildCaptureCode(session, seq)
+            pipelineLog("[IMAGE] renamed: $cameraFilename → $filename (session=${session.sessionKey} seq=$seq captureCode=$captureCode)")
+            val file = File(outputDir, filename)
+            try { file.writeBytes(data) }
+            catch (e: Exception) { Log.e(PIPELINE_TAG, "[IMAGE] save failed: $filename", e); return@withLock null }
+            val id = try {
+                repository.saveImage(
+                    SessionImage(
+                        sessionId       = session.id,
+                        filename        = filename,
+                        localPath       = file.absolutePath,
+                        timestamp       = System.currentTimeMillis(),
+                        uploadState     = UploadState.PENDING,
+                        captureCode     = captureCode,
+                        captureSequence = seq,
+                        sortOrder       = seq
+                    )
                 )
-            )
-        } catch (e: Exception) {
-            Log.e(PIPELINE_TAG, "[IMAGE] db insert failed: $renamedFilename", e); return
-        }
+            } catch (e: Exception) { Log.e(PIPELINE_TAG, "[IMAGE] db insert failed: $filename", e); return@withLock null }
+            Triple(id, filename, file)
+        } ?: return
 
+        val (imageId, renamedFilename, outputFile) = result
+        saveBackupIfEnabled(renamedFilename, outputFile)
         try {
             enqueueUpload(imageId, renamedFilename)
         } catch (e: Exception) {
@@ -311,6 +313,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Serialises the read-count → assign-sequence → write-file → DB-insert pipeline so that
+    // rapid captures (tethered burst or quick native taps) never read the same count and produce
+    // duplicate sequence numbers. Hold time is short: one DB count + one DB insert.
+    private val captureMutex = Mutex()
+
     companion object {
         private const val PIPELINE_TAG = "PhotoFlow/Pipeline"
     }
@@ -345,21 +352,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
             if (settings.cloudDeviceId != 0) return@launch   // already registered
 
-            val uuid = settings.cloudDeviceUuid.ifBlank { UUID.randomUUID().toString() }
+            // Generate and persist UUID before the API call so it's stable across retries
+            val uuid = if (settings.cloudDeviceUuid.isNotBlank()) {
+                settings.cloudDeviceUuid
+            } else {
+                UUID.randomUUID().toString().also { newUuid ->
+                    dataStore.edit { prefs -> prefs[SettingsKeys.CLOUD_DEVICE_UUID] = newUuid }
+                }
+            }
             val displayName = settings.cloudDeviceDisplayName.ifBlank { "PhotoFlow Device" }
-            pipelineLog("[CLOUD] registering device uuid=$uuid venue=${settings.cloudVenueId}")
+            val setupCode = settings.cloudSetupCode
+            if (setupCode.isBlank()) {
+                pipelineLog("[CLOUD] registration skipped — no setup code configured")
+                return@launch
+            }
+            pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=$setupCode")
             try {
-                val device = CloudDeviceService.register(
-                    CloudApiClient(baseUrl), settings.cloudVenueId, uuid, displayName
-                )
-                if (device != null) {
-                    dataStore.edit { prefs ->
-                        prefs[SettingsKeys.CLOUD_DEVICE_UUID] = device.deviceUuid
-                        prefs[SettingsKeys.CLOUD_DEVICE_ID]   = device.deviceId
+                when (val result = CloudDeviceService.register(
+                    CloudApiClient(baseUrl, settings.cloudApiKey),
+                    setupCode      = setupCode,
+                    deviceUuid     = uuid,
+                    displayName    = displayName,
+                    appVersion     = BuildConfig.VERSION_NAME,
+                    deviceModel    = Build.MODEL,
+                    androidVersion = Build.VERSION.RELEASE,
+                    stationName    = settings.cloudStationName
+                )) {
+                    is RegistrationResult.Success -> {
+                        val device = result.device
+                        dataStore.edit { prefs ->
+                            prefs[SettingsKeys.CLOUD_DEVICE_UUID] = device.deviceUuid
+                            prefs[SettingsKeys.CLOUD_DEVICE_ID]   = device.deviceId
+                            prefs[SettingsKeys.CLOUD_VENUE_ID]    = device.venueId
+                            prefs[SettingsKeys.CLOUD_VENUE_SLUG]  = device.venueSlug
+                        }
+                        pipelineLog("[CLOUD] registered device_id=${device.deviceId} venueSlug=${device.venueSlug}")
                     }
-                    pipelineLog("[CLOUD] registered device_id=${device.deviceId}")
-                } else {
-                    pipelineLog("[CLOUD] registration failed — no device returned")
+                    RegistrationResult.AuthError ->
+                        pipelineLog("[CLOUD] registration AUTH_ERROR — check API key")
+                    RegistrationResult.ConfigError ->
+                        pipelineLog("[CLOUD] registration CONFIG_ERROR — invalid setup code")
+                    is RegistrationResult.ServerError ->
+                        pipelineLog("[CLOUD] registration failed HTTP ${result.status}")
                 }
             } catch (e: Exception) {
                 pipelineLog("[CLOUD] registration error: ${e.message}")
@@ -523,40 +557,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Log.w(PIPELINE_TAG, "capture: no session found for id=$sessionId")
                 return@launch
             }
-            val existingCount = repository.getImagesForSession(sessionId).first().size
-            val sequenceNumber = existingCount + 1
-            val renamedFilename = buildFilename(settings, session.barcode, sequenceNumber)
-            val captureCode = buildCaptureCode(session, sequenceNumber)
 
-            val outputDir  = File(context.filesDir, "captures").also { it.mkdirs() }
-            val outputFile = File(outputDir, renamedFilename)
-            val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+            val outputDir = File(context.filesDir, "captures").also { it.mkdirs() }
+            // Write to a temp file so CameraX's slow capture is outside the critical section.
+            // Sequence number is assigned under captureMutex in the callback after the file exists.
+            val tempFile = File(outputDir, "tmp_${System.currentTimeMillis()}.jpg")
+            val outputOptions = ImageCapture.OutputFileOptions.Builder(tempFile).build()
 
-            Log.d(PIPELINE_TAG, "capture: firing filename=$renamedFilename session=${session.sessionKey} seq=$sequenceNumber captureCode=$captureCode")
+            Log.d(PIPELINE_TAG, "capture: firing session=${session.sessionKey}")
             imageCapture.takePicture(
                 outputOptions,
                 ContextCompat.getMainExecutor(context),
                 object : ImageCapture.OnImageSavedCallback {
                     override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                        viewModelScope.launch {
-                            saveBackupIfEnabled(renamedFilename, outputFile)
-                            val imageId = repository.saveImage(
-                                SessionImage(
-                                    sessionId       = sessionId,
-                                    filename        = renamedFilename,
-                                    localPath       = outputFile.absolutePath,
-                                    timestamp       = System.currentTimeMillis(),
-                                    uploadState     = UploadState.PENDING,
-                                    captureCode     = captureCode,
-                                    captureSequence = sequenceNumber,
-                                    sortOrder       = sequenceNumber
-                                )
-                            )
-                            Log.d(PIPELINE_TAG, "capture: saved imageId=$imageId filename=$renamedFilename")
+                        viewModelScope.launch callback@{
+                            val result = captureMutex.withLock {
+                                val seq = repository.getImagesForSession(sessionId).first().size + 1
+                                val filename = buildFilename(settings, session.barcode, seq)
+                                val captureCode = buildCaptureCode(session, seq)
+                                val finalFile = File(outputDir, filename)
+                                // renameTo is atomic on the same filesystem; fallback to copy+delete
+                                if (!tempFile.renameTo(finalFile)) {
+                                    try { tempFile.copyTo(finalFile, overwrite = true); tempFile.delete() }
+                                    catch (e: Exception) {
+                                        Log.e(PIPELINE_TAG, "capture: rename failed $filename", e)
+                                        return@withLock null
+                                    }
+                                }
+                                val id = try {
+                                    repository.saveImage(
+                                        SessionImage(
+                                            sessionId       = sessionId,
+                                            filename        = filename,
+                                            localPath       = finalFile.absolutePath,
+                                            timestamp       = System.currentTimeMillis(),
+                                            uploadState     = UploadState.PENDING,
+                                            captureCode     = captureCode,
+                                            captureSequence = seq,
+                                            sortOrder       = seq
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e(PIPELINE_TAG, "capture: db insert failed $filename", e)
+                                    return@withLock null
+                                }
+                                Log.d(PIPELINE_TAG, "capture: saved imageId=$id filename=$filename seq=$seq captureCode=$captureCode")
+                                Triple(id, filename, finalFile)
+                            } ?: return@callback
+
+                            val (imageId, renamedFilename, finalFile) = result
+                            saveBackupIfEnabled(renamedFilename, finalFile)
                             enqueueUpload(imageId, renamedFilename)
                         }
                     }
                     override fun onError(exception: ImageCaptureException) {
+                        tempFile.delete()
                         Log.e(PIPELINE_TAG, "capture: FAILED code=${exception.imageCaptureError} msg=${exception.message}")
                     }
                 }

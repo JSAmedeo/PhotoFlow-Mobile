@@ -5,7 +5,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 
-class CloudApiClient(val baseUrl: String) {
+class CloudApiClient(val baseUrl: String, private val apiKey: String = "") {
 
     companion object {
         private const val CONNECT_TIMEOUT_MS = 10_000
@@ -19,6 +19,19 @@ class CloudApiClient(val baseUrl: String) {
         return try {
             conn.connect()
             readResponse(conn)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    fun getBytes(path: String): Pair<Int, ByteArray> {
+        val conn = openConnection(path, "GET", readTimeoutMs = UPLOAD_TIMEOUT_MS)
+        return try {
+            conn.connect()
+            val code = conn.responseCode
+            val stream = if (code < 400) conn.inputStream else conn.errorStream
+            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
+            Pair(code, bytes)
         } finally {
             conn.disconnect()
         }
@@ -77,6 +90,7 @@ class CloudApiClient(val baseUrl: String) {
         conn.requestMethod = method
         conn.connectTimeout = CONNECT_TIMEOUT_MS
         conn.readTimeout = readTimeoutMs
+        if (apiKey.isNotBlank()) conn.setRequestProperty("X-PhotoFlow-Api-Key", apiKey)
         return conn
     }
 

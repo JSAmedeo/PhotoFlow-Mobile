@@ -23,4 +23,14 @@ object CloudManifestService {
             "Parse error: ${e.message}"
         }
     }
+
+    /**
+     * Fetches a photo's binary content by its photo_uid.
+     * Returns the raw bytes on HTTP 200, null on any error.
+     * Use photo_uid (the opaque public identifier), not the numeric photo_id.
+     */
+    fun fetchPhotoFile(client: CloudApiClient, photoUid: String): ByteArray? {
+        val (status, bytes) = client.getBytes("/photos/$photoUid/file")
+        return if (status == 200 && bytes.isNotEmpty()) bytes else null
+    }
 }

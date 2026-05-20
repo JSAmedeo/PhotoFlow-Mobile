@@ -18,5 +18,6 @@ data class ConnectionProfile(
     val username: String = "",
     val password: String = "",
     val remotePath: String = "/",
+    val photoOp: String = "",
     val isActive: Boolean = false
 )

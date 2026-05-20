@@ -11,7 +11,27 @@ timeout, dynamic error messages). Workers always return `Result.failure()` — r
 `MainViewModel.startAutoRetryLoop()` on a configurable interval (default 4 s). The FTP server
 must be configured in ConfigScreen → Connections for transfers to succeed.
 
-Room DB is at schema version 5. Native camera capture has full pipeline logging
+**Cloud API upload is fully integrated** on branch `feature/cloud-api-upload` and aligned to the
+Phase 1 mobile/API contract. Endpoints:
+`POST /devices/register-with-setup-code`, `POST /sessions/upsert`, `POST /photos/upload`,
+`GET /sessions/by-code/{key}/manifest`, `GET /photos/{photo_uid}/file`.
+Device registration uses a `setup_code` field (not `venue_slug`); `venue_slug` is returned in
+the response and persisted. The staging API key is sent as `X-PhotoFlow-Api-Key` when configured.
+Upload fields include `idempotency_key` and `local_photo_id` (both = `image.id`) for safe retry
+deduplication, plus device metadata (`app_version`, `device_model`, `android_version`,
+`station_name`). Error categories per contract: AUTH_ERROR (401), CONFIG_ERROR (404 on register),
+NON_RETRYABLE_REQUEST_ERROR (404 session, 422), RETRYABLE_SERVER_ERROR (5xx),
+RETRYABLE_NETWORK_ERROR (timeout/connect). HTTP 409 on upload is treated as UPLOAD_ALREADY_EXISTS
+(marks uploaded using returned `photo_uid`). LAN HTTP is permitted via
+`<base-config cleartextTrafficPermitted="true">` in `network_security_config.xml`.
+
+**Sequence number race condition fixed:** `captureMutex` in `MainViewModel` serializes the
+count-read → filename-assign → file-write/rename → DB-insert critical section for both capture
+paths (native and tethered), preventing two rapid shots from receiving the same sequence number.
+Native capture uses a temp file written outside the mutex so CameraX's slow hardware capture
+does not block the lock.
+
+Room DB is at schema version 8. Native camera capture has full pipeline logging
 (`PhotoFlow/Pipeline` tag). WiFi chip recovers correctly after device sleep.
 
 **Splash screen** is implemented: `core-splashscreen` library provides an instant dark-background
@@ -22,7 +42,7 @@ the app icon and "PhotoFlow Mobile" title before handing off to the NavGraph.
 all Room ConnectionProfiles to a versioned JSON file written to Downloads. Import uses the system
 file picker and restores both atomically. Result shown in an AlertDialog.
 
-**Active git branch: `feature/cloud-api-upload`** — cloud API upload is the next feature under development. FTP upload remains the production path on `master`.
+**Active git branch: `feature/cloud-api-upload`** — Cloud API integration is the active development path. FTP upload remains the production path on `master`.
 
 ## Environment
 - Development machine: Windows 10
@@ -75,33 +95,50 @@ app/src/main/java/com/photoflowmobile/app/
 ├── navigation/
 │   └── NavGraph.kt                  — 3-destination nav graph
 ├── ui/screens/
-│   ├── SplashScreen.kt              — Branded cold-start splash (icon + app name + tagline)
+│   ├── SplashScreen.kt              — Branded cold-start splash (icon + app name)
 │   ├── ScanCardScreen.kt            — Session entry (manual + future ML Kit scan)
 │   ├── MainScreen.kt                — 4-panel operational dashboard
-│   └── ConfigScreen.kt              — Settings (DataStore-backed)
+│   └── ConfigScreen.kt              — Settings (DataStore-backed); Cloud API section
 ├── ui/theme/
 │   └── Color.kt / Theme.kt / Type.kt
 ├── viewmodel/
-│   ├── MainViewModel.kt             — Session, images, capture, tethered camera, connections
-│   ├── ConfigViewModel.kt           — AppSettings read/write; settings export/import (JSON + MediaStore); SettingsTransferResult sealed class
+│   ├── MainViewModel.kt             — Session, images, capture (captureMutex), tethered
+│   │                                  camera, cloud device registration, connections
+│   ├── ConfigViewModel.kt           — AppSettings read/write; export/import (JSON); cloud
+│   │                                  register/manifest; SettingsTransferResult sealed class;
+│   │                                  sessionImageDao; debugRetryLastUpload() (dev debug)
 │   └── ScanCardViewModel.kt         — Session creation / resume
 ├── data/
 │   ├── model/
-│   │   ├── AppSettings.kt           — Settings data class + enums + buildFilename()
-│   │   ├── Session.kt               — Room entity
-│   │   ├── SessionImage.kt          — Room entity
-│   │   ├── ConnectionProfile.kt     — Room entity
+│   │   ├── AppSettings.kt           — Settings data class + enums + buildFilename();
+│   │   │                              includes all cloudXxx fields + cloudApiKey + cloudStationName
+│   │   ├── Session.kt               — Room entity (+ sessionKeyType, displayLabel, cloudSessionId);
+│   │   │                              also contains SessionKeyType enum (BARCODE/MANUAL/CUSTOM +
+│   │   │                              apiValue) and buildCaptureCode() helper
+│   │   ├── SessionImage.kt          — Room entity (+ cloud fields + capture metadata)
+│   │   ├── ConnectionProfile.kt     — Room entity (FTP | CLOUD_API; + photoOp field added v8)
 │   │   └── UploadState.kt           — Enum
 │   ├── db/
-│   │   ├── AppDatabase.kt           — Room database v5 (3 entities, migrations 1-5)
+│   │   ├── AppDatabase.kt           — Room database v8 (3 entities, migrations 1–8; migration 7→8 adds photoOp to connection_profiles)
 │   │   ├── SessionDao.kt            — incl. SessionWithCount join query with SQL LIMIT subquery
-│   │   ├── SessionImageDao.kt       — incl. getTransferQueue(), getFailedImages(), getById()
+│   │   ├── SessionImageDao.kt       — incl. getTransferQueue(), getFailedImages(), getById(),
+│   │   │                              getLastUploadedImage() (for debug retry)
 │   │   ├── ConnectionProfileDao.kt  — CRUD + clearAllActive() + deleteAll() (used by import)
 │   │   └── Converters.kt            — UploadState ↔ String
 │   ├── repository/
 │   │   └── SessionRepository.kt     — Sessions, images, transfer queue, getImageById()
 │   ├── datastore/
 │   │   └── SettingsDataStore.kt     — DataStore Preferences setup + serialization
+│   ├── cloud/
+│   │   ├── CloudApiClient.kt        — HttpURLConnection wrapper; injects X-PhotoFlow-Api-Key
+│   │   │                              header when apiKey is non-blank; postMultipart() for uploads;
+│   │   │                              getBytes() for binary GET (e.g. photo file retrieval)
+│   │   ├── CloudDeviceService.kt    — POST /devices/register-with-setup-code; sends setup_code +
+│   │   │                              device metadata; returns RegistrationResult sealed class
+│   │   │                              (Success(RegisteredDevice), AuthError, ConfigError, ServerError)
+│   │   ├── CloudSessionService.kt   — POST /sessions/upsert; returns SessionResult(cloudSessionId)
+│   │   └── CloudManifestService.kt  — GET /sessions/by-code/{key}/manifest?venue_id=N;
+│   │                                  fetchPhotoFile() for GET /photos/{photo_uid}/file
 │   ├── usb/
 │   │   ├── PtpConnection.kt         — USB bulk-transfer PTP transport (command/data/response
 │   │   │                              containers, interrupt-endpoint events, Samsung 512-byte
@@ -116,10 +153,36 @@ app/src/main/java/com/photoflowmobile/app/
 │   │                                  permissionDenied flag, 8 s isConnecting timeout,
 │   │                                  5 s foreground rescan loop, resetAndRescan()
 │   └── worker/
-│       └── FtpUploadWorker.kt       — WorkManager worker; real FTP via Apache Commons Net;
-│                                      always Result.failure() (ViewModel retry loop owns retries);
-│                                      shared Mutex serializes concurrent uploads
+│       ├── FtpUploadWorker.kt       — WorkManager worker; real FTP via Apache Commons Net;
+│       │                              Result.success() on upload, Result.failure() on error;
+│       │                              shared Mutex serializes uploads; no WorkManager retry
+│       └── CloudUploadWorker.kt     — WorkManager worker; POST /photos/upload multipart;
+│                                      sends idempotency_key + local_photo_id (= image.id)
+│                                      for retry deduplication; handles 401/409/5xx;
+│                                      Result.success() on upload, Result.failure() on error;
+│                                      shared uploadMutex; no WorkManager retry
 ```
+
+## Cloud API workflow (feature/cloud-api-upload — Phase 1 contract)
+
+Backend base URL: `http://<LAN-IP>:8000/api/v1` (user-configured in ConfigScreen → Connections as full base URL)
+
+| Step | Endpoint | Key fields sent |
+|------|----------|-----------------|
+| Health check | `GET /health` | — (no auth required) |
+| Register device | `POST /devices/register-with-setup-code` | `setup_code`, `device_uuid`, `display_name`, `app_version`, `device_model`, `android_version`, `station_name` |
+| Upsert session | `POST /sessions/upsert` | `device_id`, `session_key`, `session_key_type`, `display_label` |
+| Upload photo | `POST /photos/upload` (multipart) | `session_key`, `device_id`, `idempotency_key`, `local_photo_id`, `capture_code`, `capture_sequence`, `sort_order`, `custom_label`, `upload_source_path`, `app_version`, `device_model`, `android_version`, `station_name`, `file` |
+| Fetch manifest | `GET /sessions/by-code/{key}/manifest?venue_id=N` | — |
+| Fetch photo file | `GET /photos/{photo_uid}/file` | — (use `photo_uid`, not numeric `photo_id`) |
+
+- `setup_code` is entered in ConfigScreen → Cloud API → Setup Code; `venue_slug` is returned from backend and persisted (not sent in request)
+- `idempotency_key` and `local_photo_id` are both `image.id.toString()` — stable per local photo, same on retry
+- First upload returns 201; retry of same `idempotency_key` returns 200 with same `photo_uid`
+- Error categories: AUTH_ERROR (401), CONFIG_ERROR (404 on register), NON_RETRYABLE_REQUEST_ERROR (404 session/422), RETRYABLE_SERVER_ERROR (5xx), RETRYABLE_NETWORK_ERROR (timeout/connect)
+- 409 on upload → UPLOAD_ALREADY_EXISTS → marked UPLOADED (same as 200/201), `photo_uid` extracted from response if present
+- `cloudDeviceId == 0` means not yet registered — `CloudUploadWorker` fails fast with a clear message
+- Preferred terminology: `session_key`, `photo_uid`, `venue_id`, `device_id`; `session_code`/`photo_id` are compatibility aliases only
 
 ## What works end-to-end
 1. **Splash screen** — Dark background + real app icon (160dp, `AndroidView` + `ImageView` +
@@ -145,8 +208,8 @@ app/src/main/java/com/photoflowmobile/app/
    interval (default 4 s), increments `retryCount`, re-enqueues worker. State stays FAILED so
    error is visible. `forceRetry()` resets count and error message for manual retry.
 10. **FTP upload** — `FtpUploadWorker` uses Apache Commons Net; 5 s connect / 15 s data timeout;
-    always returns `Result.failure()` (WorkManager does not retry — ViewModel loop handles it);
-    shared `Mutex` serializes concurrent workers so rapid-fire captures don't corrupt transfers
+    returns `Result.success()` on upload, `Result.failure()` on error (WorkManager does not retry
+    — ViewModel loop handles failed images); shared `Mutex` serializes concurrent workers
 11. **Session history** — Right panel, clickable to select session for review; capped by
     `sessionHistoryMax` setting via SQL LIMIT in subquery (not Kotlin-side filtering)
 12. **Settings persistence** — ConfigScreen saves all settings to DataStore
@@ -191,6 +254,13 @@ app/src/main/java/com/photoflowmobile/app/
 24. **Custom filename field cursor fix** — `NamingFieldRow` keeps `var customDraft by
     remember(number, field.type)` as the local source of truth for the BasicTextField, preventing
     the DataStore round-trip from overwriting the cursor position on each keystroke.
+25. **Cloud API Phase 1 end-to-end (LAN verified)** — Registration (`POST /devices/register-with-setup-code`),
+    session upsert, and photo upload confirmed working on Motorola G 2025 against LAN backend.
+    Idempotency verified: first upload returns HTTP 201 with a `photo_uid`; every retry of the
+    same `idempotency_key` returns HTTP 200 with the identical `photo_uid`. `RegistrationResult`
+    sealed class handles typed error branches. `station_name` is always sent (required field, blank
+    is valid). Debug retry button in ConfigScreen → Cloud API resets last uploaded photo to PENDING
+    and re-enqueues with the same `idempotency_key`/`local_photo_id`.
 
 ## Tethered DSLR — architecture, fragility, and what you must not break
 
@@ -248,7 +318,7 @@ needed.
    cover the attach/deviceList-scan/permission-grant race window.
 
 6. **USB permission subsystem (Motorola / non-Samsung hosts).** `USB_DEVICE_ATTACHED` is NOT
-   dispatched to PhotoFlow on Motorola G 2025 — competing system apps claim it first. Four
+   dispatched to PhotoFlow on Motorola G 2025 — competing system apps claim it first. Six
    compensating mechanisms:
    - **`onResume` rescan:** `MainActivity.onResume()` → `rescanForAttachedCamera()` catches
      cameras plugged in while the app was backgrounded.
@@ -291,8 +361,10 @@ VM scoping) are documented there with reproduction conditions.
   side. The diff-poll fallback is the designed safety net for exactly this case.
 
 ## Known gaps / next steps
-- **Cloud API upload** — Under active development on branch `feature/cloud-api-upload`. FTP
-  remains the production upload path on `master`.
+- **Cloud API upload end-to-end validation** — COMPLETE. Phase 1 LAN test on Motorola G 2025
+  against backend at `192.168.20.40` confirmed: device registration, session upsert, photo upload
+  (HTTP 201), idempotency (retry returns HTTP 200 with same `photo_uid`). FTP remains the
+  production upload path on `master`; Cloud API integration lives on `feature/cloud-api-upload`.
 - **ML Kit barcode scanning** — Dependency in place; camera analysis use case not yet bound.
   Manual entry is the active path.
 - **EXIF strip** — ISO/shutter/aperture values in review pane are hardcoded placeholders.
@@ -309,9 +381,38 @@ VM scoping) are documented there with reproduction conditions.
   tethered center panel. Resolves to the manually selected thumbnail (`_reviewImageId`) or
   `sessionImages.firstOrNull()`. Auto-clears to latest on session switch or new photo arrival.
 - `SessionImage.filename` always holds the renamed filename. Raw camera filename is never stored.
-- `FtpUploadWorker` always returns `Result.failure()` — WorkManager retry is disabled.
-  `MainViewModel.startAutoRetryLoop()` owns the retry cadence; it increments `retryCount` but
-  does NOT change `uploadState`, so FAILED + error message stays visible during background retry.
+- `FtpUploadWorker` and `CloudUploadWorker` return `Result.success()` on a successful upload and
+  `Result.failure()` on any error — WorkManager retry is disabled. `MainViewModel.startAutoRetryLoop()`
+  owns the retry cadence for FAILED images; it increments `retryCount` but does NOT change
+  `uploadState`, so FAILED + error message stays visible during background retry.
+- **Capture sequence mutex:** `captureMutex` (a `Mutex` field in `MainViewModel`) wraps the
+  critical section in both `capturePhoto()` and `handleTetheredImage()`: DB count read →
+  sequence/filename assignment → file write or rename → Room insert. Native capture writes to
+  `tmp_<timestamp>.jpg` outside the mutex (CameraX is slow), then renames to the final filename
+  inside the mutex in `onImageSaved`. This prevents two rapid shots from getting the same
+  sequence number.
+- **Cloud API key:** `CloudApiClient(baseUrl, apiKey)` — all construction sites in
+  `ConfigViewModel`, `MainViewModel`, and `CloudUploadWorker` pass `settings.cloudApiKey`.
+  The header is only added when non-blank. Never construct `CloudApiClient(host)` alone.
+- **`RegistrationResult` sealed class:** `CloudDeviceService.register()` returns
+  `RegistrationResult` — `Success(RegisteredDevice)`, `AuthError`, `ConfigError`, or
+  `ServerError(status, body)` — instead of a nullable. Call sites in `ConfigViewModel` and
+  `MainViewModel` pattern-match on this; both guard on blank `cloudSetupCode` before calling.
+- **`station_name` always sent:** The upload fields map always includes `"station_name" to
+  settings.cloudStationName` (blank string is valid per contract). It is not conditional.
+- **Idempotency:** `CloudUploadWorker` sends `idempotency_key = image.id.toString()` and
+  `local_photo_id = image.id.toString()` on every upload attempt. The backend returns 200 +
+  same `photo_uid` on retry instead of creating a duplicate. The app treats both 200 and 201
+  as success. LAN-verified on Motorola G 2025.
+- **Device registration guard:** `cloudDeviceId == 0` means not yet registered. Workers fail
+  fast with a user-readable message. `fetchManifest()` returns early with an instruction to
+  register first. Registration always uses `cloudSetupCode`; `cloudVenueSlug` and `cloudVenueId`
+  are returned by the backend and persisted (never sent in requests).
+- **Debug retry button:** `ConfigViewModel.debugRetryLastUpload()` fetches the highest-id
+  UPLOADED image via `SessionImageDao.getLastUploadedImage()`, resets it to PENDING with the
+  same `image.id`-based `idempotency_key`, and re-enqueues `CloudUploadWorker`. Dev-only;
+  the auto-retry loop also picks it up, so multiple retries may fire in quick succession.
+- **Cleartext HTTP:** `res/xml/network_security_config.xml` uses `<base-config cleartextTrafficPermitted="true">` — necessary because the backend URL is user-configured as a LAN IP that can change. Domain-specific allowlists don't work for dynamic IPs.
 - `sessionHistoryMax` is applied as a SQL LIMIT inside a subquery (`FROM (SELECT * FROM sessions
   ORDER BY startTime DESC LIMIT :limit) s`) — not Kotlin-side `.take()`. This keeps Room from
   fetching unbounded rows before filtering.

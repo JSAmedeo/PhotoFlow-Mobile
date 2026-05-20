@@ -11,10 +11,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.photoflowmobile.app.BuildConfig
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudDeviceService
 import com.photoflowmobile.app.data.cloud.CloudManifestService
+import com.photoflowmobile.app.data.cloud.RegistrationResult
 import com.photoflowmobile.app.data.datastore.SettingsKeys
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
@@ -43,8 +45,10 @@ sealed class SettingsTransferResult {
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dataStore = application.settingsDataStore
-    private val connectionProfileDao = (application as PhotoFlowApplication).database.connectionProfileDao()
-    private val sessionDao = (application as PhotoFlowApplication).database.sessionDao()
+    private val db = (application as PhotoFlowApplication).database
+    private val connectionProfileDao = db.connectionProfileDao()
+    private val sessionDao = db.sessionDao()
+    private val sessionImageDao = db.sessionImageDao()
 
     val settings: StateFlow<AppSettings> = dataStore.data
         .catch { e ->
@@ -74,8 +78,32 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     private val _manifestResult = MutableStateFlow("")
     val manifestResult: StateFlow<String> = _manifestResult.asStateFlow()
 
+    private val _debugRetryState = MutableStateFlow("")
+    val debugRetryState: StateFlow<String> = _debugRetryState.asStateFlow()
+
     fun clearTransferResult() { _transferResult.value = null }
     fun clearManifestResult() { _manifestResult.value = "" }
+
+    fun debugRetryLastUpload() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val image = sessionImageDao.getLastUploadedImage()
+            if (image == null) {
+                _debugRetryState.value = "No uploaded photo found"
+                return@launch
+            }
+            // Reset to PENDING — keeps same id (= idempotency_key / local_photo_id)
+            sessionImageDao.update(image.copy(uploadState = com.photoflowmobile.app.data.model.UploadState.PENDING, errorMessage = null))
+            androidx.work.WorkManager.getInstance(getApplication())
+                .enqueueUniqueWork(
+                    "upload_${image.id}",
+                    androidx.work.ExistingWorkPolicy.REPLACE,
+                    androidx.work.OneTimeWorkRequestBuilder<com.photoflowmobile.app.data.worker.CloudUploadWorker>()
+                        .setInputData(androidx.work.workDataOf(com.photoflowmobile.app.data.worker.CloudUploadWorker.KEY_IMAGE_ID to image.id))
+                        .build()
+                )
+            _debugRetryState.value = "Retrying id=${image.id} idempotency_key=${image.id} prev_uid=${image.cloudPhotoUid ?: "none"}"
+        }
+    }
 
     fun save(settings: AppSettings) {
         viewModelScope.launch {
@@ -134,8 +162,9 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             ConnectionType.CLOUD_API -> viewModelScope.launch {
                 val error: String? = withContext(Dispatchers.IO) {
                     try {
-                        val (status, body) = CloudApiClient(profile.host).get("/health")
+                        val (status, body) = CloudApiClient(profile.host, settings.value.cloudApiKey).get("/health")
                         if (status == 200 && body.contains("ok")) null
+                        else if (status == 401) "Auth error (401) — check API key"
                         else "Unexpected response: HTTP $status"
                     } catch (e: Exception) {
                         e.message?.takeIf { it.isNotBlank() } ?: "Connection failed"
@@ -157,21 +186,47 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 return@launch
             }
             val s = settings.value
-            val uuid = s.cloudDeviceUuid.ifBlank { UUID.randomUUID().toString() }
+            if (s.cloudSetupCode.isBlank()) {
+                _cloudRegistrationState.value = "Enter a Setup Code first"
+                return@launch
+            }
+            // Generate and persist UUID before the API call so it's stable across retries
+            val uuid = if (s.cloudDeviceUuid.isNotBlank()) {
+                s.cloudDeviceUuid
+            } else {
+                UUID.randomUUID().toString().also { newUuid ->
+                    dataStore.edit { prefs -> prefs[SettingsKeys.CLOUD_DEVICE_UUID] = newUuid }
+                }
+            }
             val displayName = s.cloudDeviceDisplayName.ifBlank { "PhotoFlow Device" }
             _cloudRegistrationState.value = "Registering…"
             try {
-                val device = CloudDeviceService.register(
-                    CloudApiClient(profile.host), s.cloudVenueId, uuid, displayName
-                )
-                if (device != null) {
-                    dataStore.edit { prefs ->
-                        prefs[SettingsKeys.CLOUD_DEVICE_UUID] = device.deviceUuid
-                        prefs[SettingsKeys.CLOUD_DEVICE_ID]   = device.deviceId
+                when (val result = CloudDeviceService.register(
+                    CloudApiClient(profile.host, s.cloudApiKey),
+                    setupCode      = s.cloudSetupCode,
+                    deviceUuid     = uuid,
+                    displayName    = displayName,
+                    appVersion     = BuildConfig.VERSION_NAME,
+                    deviceModel    = Build.MODEL,
+                    androidVersion = Build.VERSION.RELEASE,
+                    stationName    = s.cloudStationName
+                )) {
+                    is RegistrationResult.Success -> {
+                        val device = result.device
+                        dataStore.edit { prefs ->
+                            prefs[SettingsKeys.CLOUD_DEVICE_UUID] = device.deviceUuid
+                            prefs[SettingsKeys.CLOUD_DEVICE_ID]   = device.deviceId
+                            prefs[SettingsKeys.CLOUD_VENUE_ID]    = device.venueId
+                            prefs[SettingsKeys.CLOUD_VENUE_SLUG]  = device.venueSlug
+                        }
+                        _cloudRegistrationState.value = "Registered — device_id=${device.deviceId}"
                     }
-                    _cloudRegistrationState.value = "Registered — device_id=${device.deviceId}"
-                } else {
-                    _cloudRegistrationState.value = "Registration failed — check logs"
+                    RegistrationResult.AuthError ->
+                        _cloudRegistrationState.value = "Auth error (401) — check API key in Settings → Cloud API"
+                    RegistrationResult.ConfigError ->
+                        _cloudRegistrationState.value = "Invalid setup code (404) — verify the code with your venue"
+                    is RegistrationResult.ServerError ->
+                        _cloudRegistrationState.value = "Registration failed: HTTP ${result.status}"
                 }
             } catch (e: Exception) {
                 _cloudRegistrationState.value = "Error: ${e.message}"
@@ -188,10 +243,14 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 return@launch
             }
             val venueId = settings.value.cloudVenueId
+            if (venueId == 0) {
+                _manifestResult.value = "Device not registered — tap REGISTER DEVICE first"
+                return@launch
+            }
             _manifestResult.value = "Fetching…"
             try {
                 _manifestResult.value = CloudManifestService.fetch(
-                    CloudApiClient(profile.host), sessionKey, venueId
+                    CloudApiClient(profile.host, settings.value.cloudApiKey), sessionKey, venueId
                 )
             } catch (e: Exception) {
                 _manifestResult.value = "Error: ${e.message}"
@@ -291,8 +350,12 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         put("auto_delete_after_days", s.autoDeleteAfterDays)
         put("orientation_lock_enabled", s.orientationLockEnabled)
         put("orientation_lock", s.orientationLock.name)
+        put("cloud_setup_code", s.cloudSetupCode)
+        put("cloud_venue_slug", s.cloudVenueSlug)
         put("cloud_venue_id", s.cloudVenueId)
         put("cloud_device_display_name", s.cloudDeviceDisplayName)
+        put("cloud_api_key", s.cloudApiKey)
+        put("cloud_station_name", s.cloudStationName)
     }
 
     private fun settingsFromJson(j: JSONObject) = AppSettings(
@@ -313,8 +376,12 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         orientationLockEnabled = j.optBoolean("orientation_lock_enabled", false),
         orientationLock = OrientationLock.entries.firstOrNull { it.name == j.optString("orientation_lock") }
             ?: OrientationLock.LANDSCAPE,
-        cloudVenueId = j.optInt("cloud_venue_id", 1),
-        cloudDeviceDisplayName = j.optString("cloud_device_display_name", "")
+        cloudSetupCode = j.optString("cloud_setup_code", ""),
+        cloudVenueSlug = j.optString("cloud_venue_slug", ""),
+        cloudVenueId = j.optInt("cloud_venue_id", 0),
+        cloudDeviceDisplayName = j.optString("cloud_device_display_name", ""),
+        cloudApiKey = j.optString("cloud_api_key", ""),
+        cloudStationName = j.optString("cloud_station_name", "")
         // uuid and device_id intentionally not imported — they're device identity, not config
     )
 

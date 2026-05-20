@@ -1,10 +1,12 @@
 package com.photoflowmobile.app.data.worker
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.photoflowmobile.app.BuildConfig
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudSessionService
@@ -88,10 +90,13 @@ class CloudUploadWorker(
 
             withContext(Dispatchers.IO) {
                 try {
-                    val client = CloudApiClient(profile.host)
+                    val client = CloudApiClient(profile.host, settings.cloudApiKey)
 
-                    // Ensure session exists on backend before uploading
-                    val sessionResult = CloudSessionService.ensureSession(client, deviceId, session.sessionKey)
+                    // Ensure session exists on backend before uploading (upsert — safe to retry)
+                    val sessionResult = CloudSessionService.ensureSession(
+                        client, deviceId, session.sessionKey,
+                        session.sessionKeyType, session.displayLabel
+                    )
                     if (sessionResult == null) {
                         val msg = "Failed to create cloud session for ${session.sessionKey}"
                         imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
@@ -119,8 +124,15 @@ class CloudUploadWorker(
                     }
 
                     val uploadFields = mutableMapOf(
-                        "session_code" to session.sessionKey,   // wire field name per API contract
-                        "device_id"    to deviceId.toString()
+                        "session_key"        to session.sessionKey,
+                        "device_id"          to deviceId.toString(),
+                        "idempotency_key"    to image.id.toString(),
+                        "local_photo_id"     to image.id.toString(),
+                        "app_version"        to BuildConfig.VERSION_NAME,
+                        "device_model"       to Build.MODEL,
+                        "android_version"    to Build.VERSION.RELEASE,
+                        "station_name"       to settings.cloudStationName,   // required; blank is valid
+                        "upload_source_path" to image.localPath              // strongly recommended
                     )
                     image.captureCode?.let     { uploadFields["capture_code"]     = it }
                     image.captureSequence?.let { uploadFields["capture_sequence"] = it.toString() }
@@ -137,12 +149,12 @@ class CloudUploadWorker(
 
                     when {
                         status in 200..201 -> {
-                            val json        = runCatching { JSONObject(responseBody) }.getOrNull()
-                            val photoUid    = json?.optString("photo_uid")?.takeIf { it.isNotBlank() }
-                            val photoId     = json?.optLong("photo_id", -1L)?.takeIf { it >= 0 }
-                            val uploadedAt  = json?.optString("uploaded_at")?.takeIf { it.isNotBlank() }
+                            val json       = runCatching { JSONObject(responseBody) }.getOrNull()
+                            val photoUid   = json?.optString("photo_uid")?.takeIf { it.isNotBlank() }
+                            val photoId    = json?.optLong("photo_id", -1L)?.takeIf { it >= 0 }
+                            val uploadedAt = json?.optString("uploaded_at")?.takeIf { it.isNotBlank() }
                                 ?.let { parseIso8601Millis(it) }
-
+                            val verb = if (status == 200) "retry-confirmed" else "uploaded"
                             imageDao.update(image.copy(
                                 uploadState     = UploadState.UPLOADED,
                                 errorMessage    = null,
@@ -150,16 +162,50 @@ class CloudUploadWorker(
                                 cloudPhotoId    = photoId,
                                 cloudUploadedAt = uploadedAt
                             ))
-                            log("[CLOUD] uploaded: ${image.filename} (id=$imageId)" +
+                            log("[CLOUD] $verb: ${image.filename} (id=$imageId)" +
                                 " photo_uid=$photoUid photo_id=$photoId" +
                                 " session=${session.sessionKey} captureCode=${image.captureCode} seq=${image.captureSequence}")
                             Result.success()
                         }
                         status == 409 -> {
-                            // Duplicate — file already on server; safe to mark uploaded
-                            imageDao.update(image.copy(uploadState = UploadState.UPLOADED, errorMessage = null))
-                            log("[CLOUD] duplicate upload (already on server): ${image.filename} (id=$imageId)")
+                            // UPLOAD_ALREADY_EXISTS — idempotency or capture_code collision; mark uploaded
+                            val json    = runCatching { JSONObject(responseBody) }.getOrNull()
+                            val photoUid = json?.optString("photo_uid")?.takeIf { it.isNotBlank() }
+                            imageDao.update(image.copy(
+                                uploadState   = UploadState.UPLOADED,
+                                errorMessage  = null,
+                                cloudPhotoUid = photoUid
+                            ))
+                            log("[CLOUD] already-exists (409): ${image.filename} (id=$imageId) photo_uid=$photoUid")
                             Result.success()
+                        }
+                        status == 401 -> {
+                            // AUTH_ERROR — bad/missing API key; no point retrying without key change
+                            val msg = "Auth error — check API key in Settings → Cloud API"
+                            imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                            log("[CLOUD] AUTH_ERROR: ${image.filename} (id=$imageId)")
+                            Result.failure()
+                        }
+                        status == 404 -> {
+                            // Session not found on server — session upsert needed before upload can proceed
+                            val msg = "Session not found on server — re-open or re-scan the session to sync it"
+                            imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                            log("[CLOUD] NON_RETRYABLE (404 session): ${image.filename} (id=$imageId)")
+                            Result.failure()
+                        }
+                        status == 422 -> {
+                            // NON_RETRYABLE — missing required fields; indicates a client-side bug
+                            val msg = "Upload rejected (422) — missing required fields; check app version"
+                            imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                            log("[CLOUD] NON_RETRYABLE (422): ${image.filename} (id=$imageId) | ${responseBody.take(200)}")
+                            Result.failure()
+                        }
+                        status >= 500 -> {
+                            // RETRYABLE_SERVER_ERROR — temporary server issue; auto-retry will pick it up
+                            val msg = "Server error (HTTP $status) — will retry automatically"
+                            imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                            log("[CLOUD] RETRYABLE_SERVER_ERROR: ${image.filename} (id=$imageId) — HTTP $status")
+                            Result.failure()
                         }
                         else -> {
                             val msg = "Upload failed: HTTP $status"
@@ -168,6 +214,16 @@ class CloudUploadWorker(
                             Result.failure()
                         }
                     }
+                } catch (e: java.net.SocketTimeoutException) {
+                    val msg = "Network timeout — will retry automatically"
+                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                    log("[CLOUD] RETRYABLE_NETWORK_ERROR (timeout): ${image.filename} (id=$imageId)")
+                    Result.failure()
+                } catch (e: java.net.ConnectException) {
+                    val msg = "Cannot reach server — check Wi-Fi and Base URL in Settings"
+                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                    log("[CLOUD] RETRYABLE_NETWORK_ERROR (connect): ${image.filename} (id=$imageId)")
+                    Result.failure()
                 } catch (e: Exception) {
                     val msg = e.message?.takeIf { it.isNotBlank() } ?: "Unexpected upload error"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))

@@ -70,6 +70,7 @@ fun ConfigScreen(
     val cloudRegistrationState by viewModel.cloudRegistrationState.collectAsStateWithLifecycle()
     val manifestResult by viewModel.manifestResult.collectAsStateWithLifecycle()
     val activeSessionKey by viewModel.activeSessionKey.collectAsStateWithLifecycle()
+    val debugRetryState by viewModel.debugRetryState.collectAsStateWithLifecycle()
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -169,6 +170,8 @@ fun ConfigScreen(
             activeSessionKey = activeSessionKey,
             onRegisterDevice = viewModel::registerDevice,
             onFetchManifest = viewModel::fetchManifest,
+            debugRetryState = debugRetryState,
+            onDebugRetry = viewModel::debugRetryLastUpload,
             onNavigateBack = onNavigateBack
         )
     } else {
@@ -200,6 +203,8 @@ fun ConfigScreen(
                 activeSessionKey = activeSessionKey,
                 onRegisterDevice = viewModel::registerDevice,
                 onFetchManifest = viewModel::fetchManifest,
+                debugRetryState = debugRetryState,
+                onDebugRetry = viewModel::debugRetryLastUpload,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
@@ -224,6 +229,8 @@ private fun PortraitConfigLayout(
     activeSessionKey: String?,
     onRegisterDevice: () -> Unit,
     onFetchManifest: (String) -> Unit,
+    debugRetryState: String,
+    onDebugRetry: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
     val sections = ConfigSection.entries
@@ -304,6 +311,8 @@ private fun PortraitConfigLayout(
             activeSessionKey = activeSessionKey,
             onRegisterDevice = onRegisterDevice,
             onFetchManifest = onFetchManifest,
+            debugRetryState = debugRetryState,
+            onDebugRetry = onDebugRetry,
             modifier = Modifier.weight(1f).fillMaxWidth()
         )
     }
@@ -409,6 +418,8 @@ private fun ConfigContent(
     activeSessionKey: String?,
     onRegisterDevice: () -> Unit,
     onFetchManifest: (String) -> Unit,
+    debugRetryState: String,
+    onDebugRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -455,7 +466,9 @@ private fun ConfigContent(
                     cloudRegistrationState = cloudRegistrationState,
                     activeSessionKey = activeSessionKey,
                     onRegisterDevice = onRegisterDevice,
-                    onFetchManifest = onFetchManifest
+                    onFetchManifest = onFetchManifest,
+                    debugRetryState = debugRetryState,
+                    onDebugRetry = onDebugRetry
                 )
                 ConfigSection.ABOUT        -> AboutSection()
             }
@@ -767,10 +780,15 @@ private fun ConnectionEditForm(
                 ConfigTextField("Username",    draft.username)           { onDraftChange(draft.copy(username = it)) }
                 ConfigTextField("Password",    draft.password, isPassword = true) { onDraftChange(draft.copy(password = it)) }
                 ConfigTextField("Remote Path", draft.remotePath)         { onDraftChange(draft.copy(remotePath = it)) }
+                ConfigTextField(
+                    label = "Photo Op",
+                    value = draft.photoOp,
+                    placeholder = "subfolder name (optional)"
+                ) { onDraftChange(draft.copy(photoOp = it)) }
             }
             ConnectionType.CLOUD_API -> {
                 ConfigTextField("Base URL", draft.host,
-                    placeholder = "http://192.168.1.x:8000") { onDraftChange(draft.copy(host = it)) }
+                    placeholder = "http://192.168.x.x:8000/api/v1") { onDraftChange(draft.copy(host = it)) }
             }
         }
 
@@ -1028,7 +1046,9 @@ private fun GeneralSection(
     cloudRegistrationState: String,
     activeSessionKey: String?,
     onRegisterDevice: () -> Unit,
-    onFetchManifest: (String) -> Unit
+    onFetchManifest: (String) -> Unit,
+    debugRetryState: String,
+    onDebugRetry: () -> Unit
 ) {
     SectionLabel("FILE TRANSFER")
     ConfigToggleRow("Auto Retry", settings.autoRetryEnabled) {
@@ -1265,10 +1285,35 @@ private fun GeneralSection(
     }
     Spacer(Modifier.height(10.dp))
     SectionLabel("CLOUD API")
-    var venueIdDraft by remember(settings.cloudVenueId) { mutableStateOf(settings.cloudVenueId.toString()) }
-    ConfigTextField("Venue ID", venueIdDraft, keyboardType = KeyboardType.Number) { v ->
-        venueIdDraft = v
-        v.toIntOrNull()?.let { onChange(settings.copy(cloudVenueId = it)) }
+    var setupCodeDraft by remember(settings.cloudSetupCode) { mutableStateOf(settings.cloudSetupCode) }
+    ConfigTextField("Setup Code", setupCodeDraft, placeholder = "Venue setup code") { v ->
+        setupCodeDraft = v
+        onChange(settings.copy(cloudSetupCode = v))
+    }
+    var apiKeyDraft by remember(settings.cloudApiKey) { mutableStateOf(settings.cloudApiKey) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
+    ConfigTextField(
+        label = "API Key",
+        value = apiKeyDraft,
+        visualTransformation = if (apiKeyVisible) VisualTransformation.None
+                               else PasswordVisualTransformation(),
+        trailingContent = {
+            Text(
+                if (apiKeyVisible) "HIDE" else "SHOW",
+                color = LocalAppColors.current.textDisabled,
+                fontSize = 7.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { apiKeyVisible = !apiKeyVisible }.padding(4.dp)
+            )
+        }
+    ) { v ->
+        apiKeyDraft = v
+        onChange(settings.copy(cloudApiKey = v))
+    }
+    var stationNameDraft by remember(settings.cloudStationName) { mutableStateOf(settings.cloudStationName) }
+    ConfigTextField("Station Name (optional)", stationNameDraft) { v ->
+        stationNameDraft = v
+        onChange(settings.copy(cloudStationName = v))
     }
     var displayNameDraft by remember(settings.cloudDeviceDisplayName) { mutableStateOf(settings.cloudDeviceDisplayName) }
     ConfigTextField("Device Display Name", displayNameDraft) {
@@ -1279,6 +1324,8 @@ private fun GeneralSection(
         settings.cloudDeviceUuid.ifBlank { "— (generated on first registration)" })
     InfoRow("Device ID",
         if (settings.cloudDeviceId != 0) settings.cloudDeviceId.toString() else "Not registered")
+    if (settings.cloudVenueId != 0)   InfoRow("Venue ID",   settings.cloudVenueId.toString())
+    if (settings.cloudVenueSlug.isNotBlank()) InfoRow("Venue Slug", settings.cloudVenueSlug)
     Spacer(Modifier.height(4.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
@@ -1313,6 +1360,31 @@ private fun GeneralSection(
         }
         Text(cloudRegistrationState, color = stateColor, fontSize = 8.sp,
             modifier = Modifier.padding(top = 2.dp))
+    }
+    Spacer(Modifier.height(8.dp))
+    // ── DEV ONLY ─────────────────────────────────────────────────────────────
+    Box(
+        modifier = Modifier
+            .border(1.dp, LocalAppColors.current.warning.copy(alpha = 0.5f))
+            .clickable { onDebugRetry() }
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(
+            "RETRY LAST UPLOAD (DEBUG)",
+            color = LocalAppColors.current.warning,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp
+        )
+    }
+    if (debugRetryState.isNotBlank()) {
+        Text(
+            debugRetryState,
+            color = LocalAppColors.current.textSecondary,
+            fontSize = 7.sp,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            modifier = Modifier.padding(top = 2.dp)
+        )
     }
     Spacer(Modifier.height(10.dp))
     SectionLabel("APP INFO")
@@ -1392,8 +1464,12 @@ private fun ConfigTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     isPassword: Boolean = false,
     placeholder: String = "",
+    visualTransformation: VisualTransformation? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
     onValueChange: (String) -> Unit
 ) {
+    val transform = visualTransformation
+        ?: if (isPassword) PasswordVisualTransformation() else VisualTransformation.None
     Row(
         modifier = Modifier.fillMaxWidth().border(0.5.dp, LocalAppColors.current.border).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1409,11 +1485,12 @@ private fun ConfigTextField(
                 textStyle = TextStyle(color = LocalAppColors.current.textPrimary, fontSize = 12.sp),
                 cursorBrush = SolidColor(LocalAppColors.current.blue),
                 singleLine = true,
-                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                visualTransformation = transform,
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        if (trailingContent != null) trailingContent()
     }
 }
 

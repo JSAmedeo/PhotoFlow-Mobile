@@ -34,10 +34,14 @@ data class AppSettings(
     val orientationLockEnabled: Boolean = false,
     val orientationLock: OrientationLock = OrientationLock.LANDSCAPE,
     // Cloud API
-    val cloudVenueId: Int = 1,
+    val cloudSetupCode: String = "",                    // setup code from venue — sent on device registration
+    val cloudVenueSlug: String = "",                    // returned by backend after registration; persisted
+    val cloudVenueId: Int = 0,                          // returned by backend after registration
     val cloudDeviceDisplayName: String = "",
     val cloudDeviceUuid: String = "",
-    val cloudDeviceId: Int = 0          // 0 = not yet registered
+    val cloudDeviceId: Int = 0,         // 0 = not yet registered
+    val cloudApiKey: String = "",       // staging API key; sent as X-PhotoFlow-Api-Key header
+    val cloudStationName: String = ""   // optional station label sent with registration and uploads
 )
 
 fun defaultNamingFields(): List<NamingField> = listOf(

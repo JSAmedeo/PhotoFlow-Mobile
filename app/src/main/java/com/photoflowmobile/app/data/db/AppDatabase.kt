@@ -41,6 +41,12 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE connection_profiles ADD COLUMN photoOp TEXT NOT NULL DEFAULT ''")
+    }
+}
+
 val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // sessions — venue/session-key model fields
@@ -58,7 +64,7 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
 
 @Database(
     entities = [Session::class, SessionImage::class, ConnectionProfile::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
