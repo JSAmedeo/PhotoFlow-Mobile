@@ -93,12 +93,21 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             }
             // Reset to PENDING — keeps same id (= idempotency_key / local_photo_id)
             sessionImageDao.update(image.copy(uploadState = com.photoflowmobile.app.data.model.UploadState.PENDING, errorMessage = null))
+            val constraints = androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                .build()
             androidx.work.WorkManager.getInstance(getApplication())
                 .enqueueUniqueWork(
                     "upload_${image.id}",
                     androidx.work.ExistingWorkPolicy.REPLACE,
-                    androidx.work.OneTimeWorkRequestBuilder<com.photoflowmobile.app.data.worker.CloudUploadWorker>()
-                        .setInputData(androidx.work.workDataOf(com.photoflowmobile.app.data.worker.CloudUploadWorker.KEY_IMAGE_ID to image.id))
+                    androidx.work.OneTimeWorkRequestBuilder<com.photoflowmobile.app.data.worker.UploadWorker>()
+                        .setInputData(androidx.work.workDataOf(com.photoflowmobile.app.data.worker.UploadWorker.KEY_IMAGE_ID to image.id))
+                        .setConstraints(constraints)
+                        .setBackoffCriteria(
+                            androidx.work.BackoffPolicy.EXPONENTIAL,
+                            androidx.work.WorkRequest.MIN_BACKOFF_MILLIS,
+                            java.util.concurrent.TimeUnit.MILLISECONDS
+                        )
                         .build()
                 )
             _debugRetryState.value = "Retrying id=${image.id} idempotency_key=${image.id} prev_uid=${image.cloudPhotoUid ?: "none"}"

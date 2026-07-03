@@ -43,8 +43,7 @@ import com.photoflowmobile.app.data.model.ConnectionType
 import com.photoflowmobile.app.data.repository.SessionRepository
 import com.photoflowmobile.app.data.usb.MtpCameraManager
 import com.photoflowmobile.app.data.usb.TetheredStatus
-import com.photoflowmobile.app.data.worker.CloudUploadWorker
-import com.photoflowmobile.app.data.worker.FtpUploadWorker
+import com.photoflowmobile.app.data.worker.UploadWorker
 import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
@@ -330,25 +329,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Upload dispatch ───────────────────────────────────────────────────────
 
-    private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+    private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<UploadWorker>()
+            .setInputData(workDataOf(UploadWorker.KEY_IMAGE_ID to imageId))
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()
-        return when (activeConnection.value?.connectionType) {
-            ConnectionType.CLOUD_API ->
-                OneTimeWorkRequestBuilder<CloudUploadWorker>()
-                    .setInputData(workDataOf(CloudUploadWorker.KEY_IMAGE_ID to imageId))
-                    .setConstraints(constraints)
-                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
-                    .build()
-            else ->
-                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
-                    .setConstraints(constraints)
-                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
-                    .build()
-        }
-    }
 
     private fun enqueueUpload(imageId: Long, imageName: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val context = getApplication<Application>()
