@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_FINE_LOCATION is required on Android 8.1+ to read the Wi-Fi SSID via
+         WifiManager.connectionInfo. Without it the WifiSsidChip in the top bar shows
+         "WiFi Connected" instead of the network name. The chip degrades gracefully when
+         the permission is denied — no runtime crash, just no SSID text. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />

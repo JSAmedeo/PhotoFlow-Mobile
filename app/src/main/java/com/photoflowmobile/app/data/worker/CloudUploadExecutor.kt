@@ -8,6 +8,8 @@ import com.photoflowmobile.app.BuildConfig
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudSessionService
+import com.photoflowmobile.app.data.cloud.UploadOutcome
+import com.photoflowmobile.app.data.cloud.classifyCloudResponse
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
 import com.photoflowmobile.app.data.model.ConnectionProfile
@@ -140,8 +142,8 @@ internal object CloudUploadExecutor {
                 imageFile = file
             )
 
-            when {
-                status in 200..201 -> {
+            when (classifyCloudResponse(status)) {
+                is UploadOutcome.Success -> {
                     val json       = runCatching { JSONObject(responseBody) }.getOrNull()
                     val photoUid   = json?.optString("photo_uid")?.takeIf { it.isNotBlank() }
                     val photoId    = json?.optLong("photo_id", -1L)?.takeIf { it >= 0 }
@@ -160,7 +162,7 @@ internal object CloudUploadExecutor {
                         " session=${session.sessionKey} captureCode=${image.captureCode} seq=${image.captureSequence}")
                     ListenableWorker.Result.success()
                 }
-                status == 409 -> {
+                is UploadOutcome.AlreadyExists -> {
                     val json     = runCatching { JSONObject(responseBody) }.getOrNull()
                     val photoUid = json?.optString("photo_uid")?.takeIf { it.isNotBlank() }
                     imageDao.update(image.copy(
@@ -171,34 +173,28 @@ internal object CloudUploadExecutor {
                     log("[CLOUD] already-exists (409): ${image.filename} (id=$imageId) photo_uid=$photoUid")
                     ListenableWorker.Result.success()
                 }
-                status == 401 -> {
-                    val msg = "Auth error — check API key in Settings → Cloud API"
-                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                    log("[CLOUD] AUTH_ERROR: ${image.filename} (id=$imageId)")
-                    ListenableWorker.Result.failure()
-                }
-                status == 404 -> {
-                    val msg = "Session not found on server — re-open or re-scan the session to sync it"
-                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                    log("[CLOUD] NON_RETRYABLE (404 session): ${image.filename} (id=$imageId)")
-                    ListenableWorker.Result.failure()
-                }
-                status == 422 -> {
-                    val msg = "Upload rejected (422) — missing required fields; check app version"
-                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                    log("[CLOUD] NON_RETRYABLE (422): ${image.filename} (id=$imageId) | ${responseBody.take(200)}")
-                    ListenableWorker.Result.failure()
-                }
-                status >= 500 -> {
+                is UploadOutcome.Retryable -> {
                     val msg = "Server error (HTTP $status) — will retry automatically"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
                     log("[CLOUD] RETRYABLE_SERVER_ERROR: ${image.filename} (id=$imageId) — HTTP $status")
                     ListenableWorker.Result.retry()
                 }
-                else -> {
-                    val msg = "Upload failed: HTTP $status"
+                is UploadOutcome.Terminal -> {
+                    val msg = when (status) {
+                        401  -> "Auth error — check API key in Settings → Cloud API"
+                        404  -> "Session not found on server — re-open or re-scan the session to sync it"
+                        422  -> "Upload rejected (422) — missing required fields; check app version"
+                        else -> "Upload failed: HTTP $status"
+                    }
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                    log("[CLOUD] FAILED: ${image.filename} (id=$imageId) — HTTP $status | ${responseBody.take(300)}")
+                    val label = when (status) {
+                        401  -> "AUTH_ERROR"
+                        404  -> "NON_RETRYABLE (404 session)"
+                        422  -> "NON_RETRYABLE (422)"
+                        else -> "FAILED"
+                    }
+                    log("[CLOUD] $label: ${image.filename} (id=$imageId) — HTTP $status" +
+                        if (status !in listOf(401, 404)) " | ${responseBody.take(200)}" else "")
                     ListenableWorker.Result.failure()
                 }
             }
@@ -221,6 +217,8 @@ internal object CloudUploadExecutor {
     }
 
     fun parseIso8601Millis(s: String): Long? = runCatching {
-        java.time.Instant.parse(if ('Z' in s || '+' in s) s else "${s}Z").toEpochMilli()
+        // Detect timezone indicator: 'Z', '+', or '-' at position 19 (YYYY-MM-DDTHH:MM:SS[-|+])
+        val hasOffset = 'Z' in s || '+' in s || (s.length > 19 && s[19] == '-')
+        java.time.Instant.parse(if (hasOffset) s else "${s}Z").toEpochMilli()
     }.getOrNull()
 }

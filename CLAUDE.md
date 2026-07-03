@@ -106,8 +106,8 @@ The UI should feel like a professional field operations console, not a consumer 
 - Camera capture: ImageCapture use case held in MainViewModel; fires CameraX takePicture()
   to a temp file (`tmp_<timestamp>.jpg`), then under `captureMutex` reads the DB count,
   assigns sequence number, renames the temp file to the final filename, and inserts
-  SessionImage (PENDING) into Room. Enqueues CloudUploadWorker or FtpUploadWorker depending
-  on active connection type. Logs `capture: firing`, `capture: saved`, or
+  SessionImage (PENDING) into Room. Enqueues `UploadWorker` (single unified worker; resolves
+  FTP vs Cloud API at execution time). Logs `capture: firing`, `capture: saved`, or
   `capture: FAILED code=N` to `PhotoFlow/Pipeline` tag.
 - **Sequence number race fix:** `captureMutex` (a `kotlinx.coroutines.sync.Mutex` in
   `MainViewModel`) serialises the count-read → filename-build → file-rename → DB-insert
@@ -189,10 +189,19 @@ The UI should feel like a professional field operations console, not a consumer 
 ## Key libraries
 - CameraX 1.3.4 — camera preview (`PreviewView`) and capture (`ImageCapture`)
 - ML Kit 17.3.0 — barcode scanning (wired, not yet active in UI)
-- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 8
-- WorkManager 2.9.0 — `FtpUploadWorker` and `CloudUploadWorker`; return `Result.success()` on
-  successful upload, `Result.failure()` on error (no WorkManager retry — ViewModel
-  `startAutoRetryLoop()` handles background retry on configurable interval)
+- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 9
+- WorkManager 2.9.0 — single `UploadWorker` (replaces old `FtpUploadWorker`/`CloudUploadWorker`);
+  resolves FTP vs Cloud API at execution time from the active `ConnectionProfile`; uses
+  `EXPONENTIAL` back-off + `NetworkType.CONNECTED` constraint; `uploadMutex` in companion
+  prevents concurrent uploads; `runAttemptCount >= 10` caps WorkManager retries and falls
+  back to `Result.failure()`; ViewModel `startAutoRetryLoop()` drives FAILED→re-enqueue on
+  configurable interval. `FtpUploadExecutor` and `CloudUploadExecutor` are internal objects
+  called by `UploadWorker`, not registered as workers.
+- `CredentialStore` (`data/security/CredentialStore.kt`) — wraps `EncryptedSharedPreferences`
+  (AES256-SIV keys, AES256-GCM values) for FTP passwords keyed by profile ID and the Cloud
+  API key. `ConnectionProfile.password` is stored blank in Room; passwords live only in
+  `CredentialStore`. Migration from DataStore/Room plaintext runs once in
+  `PhotoFlowApplication.onCreate()` via `migrateSecretsToCredentialStore()`.
 - Apache Commons Net 3.10.0 — FTP transfers; `connectTimeout = 5 s`, `dataTimeout = 15 s`;
   dynamic error messages include phone IP and server IP/port
 - DataStore Preferences 1.1.1 — AppSettings persistence
@@ -541,3 +550,32 @@ At a glance, the operator should always be able to tell:
 - Do not send a new `idempotency_key` on retry — always use `image.id.toString()` as the
   stable key so the backend can deduplicate retries and return HTTP 200 with the same
   `photo_uid` instead of creating a duplicate record.
+- Do not register `FtpUploadWorker` or `CloudUploadWorker` — both are deleted; the single
+  `UploadWorker` handles both transport types by reading the active `ConnectionProfile` at
+  execution time. Registering the old class names will throw `ClassNotFoundException`.
+- Do not store FTP passwords in `ConnectionProfile.password` (Room) — always write blank to
+  Room and persist via `credentialStore.storeFtpPassword(profileId, password)`. Likewise, do
+  not write the Cloud API key to DataStore directly from new code; use
+  `credentialStore.storeCloudApiKey(key)` (the DataStore field is a migration fallback only).
+- Do not pass plain HTTP URLs that resolve to non-LAN hosts to `CloudApiClient` — the client
+  throws `IllegalArgumentException` in `openConnection()` for `http://` URLs whose host is
+  not classified as private by `PrivateAddressChecker`. Use `https://` for internet hosts.
+- Do not add database or DataStore files to the Android backup set — `backup_rules.xml` and
+  `data_extraction_rules.xml` exclude `photoflow.db*` and `datastore/`. Restoring a backup
+  across devices would inject a stale Room schema and stale credentials into a fresh install.
+
+## Permissions
+
+| Permission | Why required | Graceful degradation |
+|---|---|---|
+| `CAMERA` | CameraX live preview and capture in Native Camera mode | No preview or CAPTURE button without it |
+| `INTERNET` | FTP and Cloud API uploads | Uploads fail; app still usable for capture |
+| `WRITE_EXTERNAL_STORAGE` (maxSdk=28) | Save images on Android ≤8 | Not needed on Android 9+ |
+| `ACCESS_WIFI_STATE` | Detect Wi-Fi connectivity for the SSID chip | Chip shows "WiFi not connected" |
+| `ACCESS_FINE_LOCATION` | Read Wi-Fi SSID via `WifiManager.connectionInfo` (required Android 8.1+) | Chip shows "WiFi Connected" without SSID |
+| `ACCESS_NETWORK_STATE` | Monitor network changes in `WifiSsidChip` | Chip may not update on network change |
+| `USB_PERMISSION` (dynamic) | Claim the USB interface for PTP/tethered DSLR | Tethered mode unavailable |
+
+`ACCESS_FINE_LOCATION` is never used for geolocation. It is required solely because Android
+8.1 (API 27) restricted SSID reads behind the location permission gate. The `WifiSsidChip`
+composable checks the permission at runtime and shows a degraded label when denied.
