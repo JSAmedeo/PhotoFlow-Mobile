@@ -137,7 +137,7 @@ internal object CloudUploadExecutor {
                 fields    = uploadFields,
                 fileField = "file",
                 fileName  = image.filename,
-                fileBytes = file.readBytes()
+                imageFile = file
             )
 
             when {
