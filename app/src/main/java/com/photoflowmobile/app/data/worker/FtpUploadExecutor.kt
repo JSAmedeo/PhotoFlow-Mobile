@@ -86,7 +86,8 @@ internal object FtpUploadExecutor {
                 return@withContext ListenableWorker.Result.retry()
             }
 
-            if (!ftp.login(profile.username, profile.password)) {
+            val password = app.credentialStore.getFtpPassword(profile.id)
+            if (!ftp.login(profile.username, password)) {
                 val msg = "Login failed — check credentials for ${profile.username}@${profile.host} (server: ${ftp.replyString.trim()})"
                 imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
                 log("[UPLOAD] TERMINAL (auth): ${image.filename} (id=$imageId)")

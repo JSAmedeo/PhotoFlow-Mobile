@@ -45,7 +45,9 @@ sealed class SettingsTransferResult {
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dataStore = application.settingsDataStore
-    private val db = (application as PhotoFlowApplication).database
+    private val app = application as PhotoFlowApplication
+    private val db = app.database
+    private val credentialStore = app.credentialStore
     private val connectionProfileDao = db.connectionProfileDao()
     private val sessionDao = db.sessionDao()
     private val sessionImageDao = db.sessionImageDao()
@@ -116,19 +118,31 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     fun save(settings: AppSettings) {
         viewModelScope.launch {
+            // Mirror API key to CredentialStore so workers always use the encrypted copy
+            if (settings.cloudApiKey.isNotBlank()) {
+                credentialStore.storeCloudApiKey(settings.cloudApiKey)
+            }
             dataStore.edit { prefs -> settings.toPreferences(prefs) }
         }
     }
 
     fun upsertProfile(profile: ConnectionProfile) {
         viewModelScope.launch {
-            if (profile.id == 0L) connectionProfileDao.insert(profile)
-            else connectionProfileDao.update(profile)
+            // Store FTP password in CredentialStore; blank it in Room so it is never persisted plaintext
+            if (profile.password.isNotBlank()) {
+                credentialStore.storeFtpPassword(profile.id, profile.password)
+            }
+            val sanitized = profile.copy(password = "")
+            if (sanitized.id == 0L) connectionProfileDao.insert(sanitized)
+            else connectionProfileDao.update(sanitized)
         }
     }
 
     fun deleteProfile(profile: ConnectionProfile) {
-        viewModelScope.launch { connectionProfileDao.delete(profile) }
+        viewModelScope.launch {
+            credentialStore.removeFtpPassword(profile.id)
+            connectionProfileDao.delete(profile)
+        }
     }
 
     fun setActiveProfile(profile: ConnectionProfile) {
@@ -153,7 +167,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                     try {
                         ftp.connectTimeout = 5_000
                         ftp.connect(profile.host, profile.port)
-                        val ok = ftp.login(profile.username, profile.password)
+                        val password = credentialStore.getFtpPassword(profile.id)
+                        val ok = ftp.login(profile.username, password)
                         ftp.logout()
                         if (ok) null else "Login failed — check username and password"
                     } catch (e: java.net.SocketTimeoutException) {
@@ -171,7 +186,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             ConnectionType.CLOUD_API -> viewModelScope.launch {
                 val error: String? = withContext(Dispatchers.IO) {
                     try {
-                        val (status, body) = CloudApiClient(profile.host, settings.value.cloudApiKey).get("/health")
+                        val apiKey = credentialStore.getCloudApiKey(fallback = settings.value.cloudApiKey)
+                        val (status, body) = CloudApiClient(profile.host, apiKey).get("/health")
                         if (status == 200 && body.contains("ok")) null
                         else if (status == 401) "Auth error (401) — check API key"
                         else "Unexpected response: HTTP $status"
@@ -210,8 +226,9 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             val displayName = s.cloudDeviceDisplayName.ifBlank { "PhotoFlow Device" }
             _cloudRegistrationState.value = "Registering…"
             try {
+                val apiKey = credentialStore.getCloudApiKey(fallback = s.cloudApiKey)
                 when (val result = CloudDeviceService.register(
-                    CloudApiClient(profile.host, s.cloudApiKey),
+                    CloudApiClient(profile.host, apiKey),
                     setupCode      = s.cloudSetupCode,
                     deviceUuid     = uuid,
                     displayName    = displayName,
@@ -258,8 +275,9 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             }
             _manifestResult.value = "Fetching…"
             try {
+                val apiKey = credentialStore.getCloudApiKey(fallback = settings.value.cloudApiKey)
                 _manifestResult.value = CloudManifestService.fetch(
-                    CloudApiClient(profile.host, settings.value.cloudApiKey), sessionKey, venueId
+                    CloudApiClient(profile.host, apiKey), sessionKey, venueId
                 )
             } catch (e: Exception) {
                 _manifestResult.value = "Error: ${e.message}"
@@ -332,7 +350,11 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 if (profilesJson != null) {
                     connectionProfileDao.deleteAll()
                     for (i in 0 until profilesJson.length()) {
-                        connectionProfileDao.insert(profileFromJson(profilesJson.getJSONObject(i)))
+                        val parsed = profileFromJson(profilesJson.getJSONObject(i))
+                        val newId = connectionProfileDao.insert(parsed.copy(password = ""))
+                        if (parsed.password.isNotBlank()) {
+                            credentialStore.storeFtpPassword(newId, parsed.password)
+                        }
                     }
                 }
 
@@ -402,7 +424,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 put("host", p.host)
                 put("port", p.port)
                 put("username", p.username)
-                put("password", p.password)
+                // Read password from CredentialStore — Room column is blank after WI-3 migration
+                put("password", credentialStore.getFtpPassword(p.id))
                 put("remote_path", p.remotePath)
                 put("is_active", p.isActive)
             })

@@ -370,10 +370,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pipelineLog("[CLOUD] registration skipped — no setup code configured")
                 return@launch
             }
-            pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=$setupCode")
+            val codeLen = setupCode.length
+            pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=***${codeLen}chars")
             try {
+                val appInstance = getApplication<PhotoFlowApplication>()
+                val apiKey = appInstance.credentialStore.getCloudApiKey(fallback = settings.cloudApiKey)
                 when (val result = CloudDeviceService.register(
-                    CloudApiClient(baseUrl, settings.cloudApiKey),
+                    CloudApiClient(baseUrl, apiKey),
                     setupCode      = setupCode,
                     deviceUuid     = uuid,
                     displayName    = displayName,

@@ -84,7 +84,9 @@ internal object CloudUploadExecutor {
         log("[CLOUD]   profile=${profile.host}")
 
         try {
-            val client = CloudApiClient(profile.host, settings.cloudApiKey)
+            // Prefer CredentialStore; fall back to DataStore for pre-migration compat
+            val apiKey = app.credentialStore.getCloudApiKey(fallback = settings.cloudApiKey)
+            val client = CloudApiClient(profile.host, apiKey)
 
             val sessionResult = CloudSessionService.ensureSession(
                 client, deviceId, session.sessionKey,

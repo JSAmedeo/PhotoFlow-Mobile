@@ -15,6 +15,9 @@ interface ConnectionProfileDao {
     @Query("SELECT * FROM connection_profiles WHERE isActive = 1 LIMIT 1")
     suspend fun getActiveProfileOnce(): ConnectionProfile?
 
+    @Query("SELECT * FROM connection_profiles ORDER BY name ASC")
+    suspend fun getAllProfilesOnce(): List<ConnectionProfile>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(profile: ConnectionProfile): Long
 

@@ -111,6 +111,9 @@ dependencies {
     // Pure-Java library; no extra native config needed
     implementation(libs.commons.net)
 
+    // ── Security (EncryptedSharedPreferences for credential storage) ─────────
+    implementation(libs.androidx.security.crypto)
+
     // ── DataStore Preferences ────────────────────────────────
     implementation(libs.datastore.preferences)
 

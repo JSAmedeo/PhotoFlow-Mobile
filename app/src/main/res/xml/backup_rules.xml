@@ -1,13 +1,17 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup exclusion rules for API ≤ 30 (full-backup-content).
+  Mirrored in data_extraction_rules.xml for API 31+.
+
+  Excluding the entire Room database is intentional: a restored backup would contain stale
+  upload state (UPLOADING rows, missing local files) that is worse than a clean start.
+  The DataStore file holds the Cloud API key and other sensitive config.
+  The EncryptedSharedPreferences file (photoflow_credentials) is excluded by Android
+  automatically since it lives in the app's private shared_prefs directory.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="photoflow.db" />
+    <exclude domain="database" path="photoflow.db-wal" />
+    <exclude domain="database" path="photoflow.db-shm" />
+    <exclude domain="file" path="datastore" />
 </full-backup-content>
