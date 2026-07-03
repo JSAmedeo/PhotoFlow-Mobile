@@ -86,6 +86,13 @@ class CloudApiClient(val baseUrl: String, private val apiKey: String = "") {
 
     private fun openConnection(path: String, method: String, readTimeoutMs: Int = READ_TIMEOUT_MS): HttpURLConnection {
         val url = URL("${baseUrl.trimEnd('/')}$path")
+        // Refuse plaintext HTTP to non-LAN hosts: API key travels in the header and must not
+        // cross the public internet unencrypted. LAN/loopback IPs are permitted for staging.
+        if (url.protocol == "http" && !PrivateAddressChecker.isPrivate(url.host)) {
+            throw IllegalArgumentException(
+                "Cloud API over plain HTTP is only allowed for LAN addresses — use https:// for internet hosts"
+            )
+        }
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.connectTimeout = CONNECT_TIMEOUT_MS
