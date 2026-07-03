@@ -51,7 +51,16 @@ class CloudUploadWorker(
         )
         fun log(msg: String) { if (settings.loggingEnabled) Log.i(TAG, msg) }
 
+        // WorkManager has retried enough — the in-app loop can still resurrect failed items
         val image = imageDao.getById(imageId) ?: return Result.failure()
+        if (runAttemptCount >= 10) {
+            imageDao.update(image.copy(
+                uploadState  = UploadState.FAILED,
+                errorMessage = "Max automatic retries reached — tap RETRY to try again"
+            ))
+            return Result.failure()
+        }
+
         val file = File(image.localPath)
         if (!file.exists()) {
             imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = "Local file not found"))
@@ -83,7 +92,7 @@ class CloudUploadWorker(
                 imageDao.update(image.copy(uploadState = UploadState.UPLOADING, errorMessage = null))
             }
 
-            log("[CLOUD] uploading: ${image.filename} (id=$imageId)")
+            log("[CLOUD] uploading: ${image.filename} (id=$imageId) attempt=${runAttemptCount + 1}")
             log("[CLOUD]   session=${session.sessionKey} type=${session.sessionKeyType} device=$deviceId")
             log("[CLOUD]   captureCode=${image.captureCode} seq=${image.captureSequence} sort=${image.sortOrder}")
             log("[CLOUD]   profile=${profile.host}")
@@ -201,11 +210,11 @@ class CloudUploadWorker(
                             Result.failure()
                         }
                         status >= 500 -> {
-                            // RETRYABLE_SERVER_ERROR — temporary server issue; auto-retry will pick it up
+                            // RETRYABLE_SERVER_ERROR — temporary server issue; WorkManager will back off and retry
                             val msg = "Server error (HTTP $status) — will retry automatically"
                             imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
                             log("[CLOUD] RETRYABLE_SERVER_ERROR: ${image.filename} (id=$imageId) — HTTP $status")
-                            Result.failure()
+                            Result.retry()
                         }
                         else -> {
                             val msg = "Upload failed: HTTP $status"
@@ -218,12 +227,12 @@ class CloudUploadWorker(
                     val msg = "Network timeout — will retry automatically"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
                     log("[CLOUD] RETRYABLE_NETWORK_ERROR (timeout): ${image.filename} (id=$imageId)")
-                    Result.failure()
+                    Result.retry()
                 } catch (e: java.net.ConnectException) {
                     val msg = "Cannot reach server — check Wi-Fi and Base URL in Settings"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
                     log("[CLOUD] RETRYABLE_NETWORK_ERROR (connect): ${image.filename} (id=$imageId)")
-                    Result.failure()
+                    Result.retry()
                 } catch (e: Exception) {
                     val msg = e.message?.takeIf { it.isNotBlank() } ?: "Unexpected upload error"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))

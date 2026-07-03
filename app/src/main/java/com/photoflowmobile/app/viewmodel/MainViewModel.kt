@@ -11,10 +11,16 @@ import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.WorkRequest
 import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
@@ -324,17 +330,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Upload dispatch ───────────────────────────────────────────────────────
 
-    private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest =
-        when (activeConnection.value?.connectionType) {
+    private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        return when (activeConnection.value?.connectionType) {
             ConnectionType.CLOUD_API ->
                 OneTimeWorkRequestBuilder<CloudUploadWorker>()
                     .setInputData(workDataOf(CloudUploadWorker.KEY_IMAGE_ID to imageId))
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
                     .build()
             else ->
                 OneTimeWorkRequestBuilder<FtpUploadWorker>()
                     .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
                     .build()
         }
+    }
 
     private fun enqueueUpload(imageId: Long, imageName: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val context = getApplication<Application>()
@@ -402,9 +416,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ── Auto-retry loop ───────────────────────────────────────────────────────
+    //
+    // Architecture: WorkManager is the durable retry engine (Result.retry() + CONNECTED
+    // constraint + EXPONENTIAL backoff). This loop is the UI-facing supplement: it exists to
+    // honour the user-configurable autoRetryEnabled / interval / max-count settings and to
+    // bump the visible retryCount counter that the transfer-queue dialog shows.
+    //
+    // To avoid a duplicate upload when both paths fire at the same time, we check the
+    // WorkManager state before enqueuing: if WorkManager already has a job ENQUEUED, RUNNING,
+    // or BLOCKED for that image, we skip the re-enqueue (the worker is already in flight).
 
     private fun startAutoRetryLoop() {
         viewModelScope.launch {
+            val context = getApplication<Application>()
             while (true) {
                 val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
                 if (settings.autoRetryEnabled) {
@@ -412,10 +436,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val withinLimit = settings.autoRetryMaxCount == -1 ||
                                 image.retryCount < settings.autoRetryMaxCount
                         if (withinLimit) {
-                            // Increment retry count only — keep FAILED state and error message visible
-                            repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
-                            enqueueUpload(image.id, image.filename, ExistingWorkPolicy.REPLACE)
-                            pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
+                            // Skip if WorkManager already has an active job for this image
+                            val infos = withContext(Dispatchers.IO) {
+                                WorkManager.getInstance(context)
+                                    .getWorkInfosForUniqueWork("upload_${image.id}").get()
+                            }
+                            val alreadyQueued = infos.any { info ->
+                                info.state in listOf(
+                                    WorkInfo.State.ENQUEUED,
+                                    WorkInfo.State.RUNNING,
+                                    WorkInfo.State.BLOCKED
+                                )
+                            }
+                            if (!alreadyQueued) {
+                                // Increment retry count only — keep FAILED state and error message visible
+                                repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
+                                enqueueUpload(image.id, image.filename, ExistingWorkPolicy.REPLACE)
+                                pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
+                            }
                         }
                     }
                     delay(settings.autoRetryIntervalSeconds * 1_000L)

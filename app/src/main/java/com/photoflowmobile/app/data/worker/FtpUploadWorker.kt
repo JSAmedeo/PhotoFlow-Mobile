@@ -18,6 +18,7 @@ import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.net.ConnectException
 import java.net.NetworkInterface
 import java.net.SocketTimeoutException
@@ -58,12 +59,21 @@ class FtpUploadWorker(
             return Result.failure()
         }
 
+        // WorkManager has retried enough — the in-app loop can still resurrect failed items
+        if (runAttemptCount >= 10) {
+            imageDao.update(image.copy(
+                uploadState  = UploadState.FAILED,
+                errorMessage = "Max automatic retries reached — tap RETRY to try again"
+            ))
+            return Result.failure()
+        }
+
         return uploadMutex.withLock {
             // Only show UPLOADING indicator for fresh PENDING uploads, not silent background retries
             if (image.uploadState == UploadState.PENDING) {
                 imageDao.update(image.copy(uploadState = UploadState.UPLOADING, errorMessage = null))
             }
-            workerLog("[UPLOAD] started: ${image.filename} (id=$imageId)")
+            workerLog("[UPLOAD] started: ${image.filename} (id=$imageId) attempt=${runAttemptCount + 1}")
             withContext(Dispatchers.IO) {
                 val ftp = FTPClient()
                 ftp.connectTimeout = CONNECT_TIMEOUT_MS
@@ -76,20 +86,20 @@ class FtpUploadWorker(
                         val phoneIp = localIpAddress() ?: "device"
                         val msg = "Connection timed out — could not reach ${profile.host}:${profile.port} from $phoneIp within ${CONNECT_TIMEOUT_MS / 1000}s"
                         imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                        workerLog("[UPLOAD] failed: ${image.filename} (id=$imageId) — connection timed out")
-                        return@withContext Result.failure()
+                        workerLog("[UPLOAD] RETRYABLE (timeout): ${image.filename} (id=$imageId)")
+                        return@withContext Result.retry()
                     } catch (e: ConnectException) {
                         val phoneIp = localIpAddress() ?: "device"
                         val msg = "Cannot connect to ${profile.host}:${profile.port} from $phoneIp — server refused connection or is unreachable"
                         imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                        workerLog("[UPLOAD] failed: ${image.filename} (id=$imageId) — server unreachable")
-                        return@withContext Result.failure()
+                        workerLog("[UPLOAD] RETRYABLE (connect refused): ${image.filename} (id=$imageId)")
+                        return@withContext Result.retry()
                     }
 
                     if (!ftp.login(profile.username, profile.password)) {
                         val msg = "Login failed — check credentials for ${profile.username}@${profile.host} (server: ${ftp.replyString.trim()})"
                         imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                        workerLog("[UPLOAD] failed: ${image.filename} (id=$imageId) — authentication failed")
+                        workerLog("[UPLOAD] TERMINAL (auth): ${image.filename} (id=$imageId)")
                         return@withContext Result.failure()
                     }
 
@@ -103,13 +113,13 @@ class FtpUploadWorker(
                         val subdir = profile.photoOp.trim('/')
                         ftp.makeDirectory(subdir)
                         if (!ftp.changeWorkingDirectory(subdir)) {
-                            throw Exception("Could not navigate to Photo Op subfolder \"$subdir\" on ${profile.host}")
+                            throw IOException("Could not navigate to Photo Op subfolder \"$subdir\" on ${profile.host}")
                         }
                     }
 
                     FileInputStream(file).use { stream ->
                         if (!ftp.storeFile(image.filename, stream)) {
-                            throw Exception("Upload rejected by server — ${ftp.replyString.trim()}")
+                            throw IOException("Upload rejected by server — ${ftp.replyString.trim()}")
                         }
                     }
 
@@ -118,10 +128,16 @@ class FtpUploadWorker(
                     workerLog("[UPLOAD] succeeded: ${image.filename} (id=$imageId)")
                     Result.success()
 
+                } catch (e: IOException) {
+                    // I/O errors during transfer are transient — network glitch, pipe reset, etc.
+                    val msg = e.message?.takeIf { it.isNotBlank() } ?: "I/O error during upload"
+                    imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
+                    workerLog("[UPLOAD] RETRYABLE (io): ${image.filename} (id=$imageId) — $msg")
+                    Result.retry()
                 } catch (e: Exception) {
                     val msg = e.message?.takeIf { it.isNotBlank() } ?: "Unexpected error during upload"
                     imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = msg))
-                    workerLog("[UPLOAD] failed: ${image.filename} (id=$imageId) — upload error")
+                    workerLog("[UPLOAD] TERMINAL: ${image.filename} (id=$imageId) — $msg")
                     Result.failure()
                 } finally {
                     if (ftp.isConnected) try { ftp.disconnect() } catch (_: Exception) {}
