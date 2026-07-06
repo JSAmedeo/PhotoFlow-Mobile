@@ -404,10 +404,17 @@ VM scoping) are documented there with reproduction conditions.
 - **ML Kit barcode scanning** — Dependency in place; camera analysis use case not yet bound.
   Manual entry is the active path.
 - **EXIF strip** — ISO/shutter/aperture values in review pane are hardcoded placeholders.
-- **Tethered detach cleanup** — Poll loop logs 10–15 s of failing commands after device unplug
-  before teardown completes. Cosmetic; not data-damaging.
 - **Non-Canon DSLR validation** — `GenericPtpAdapter` + `NikonAdapter` are written to standard
   PTP spec but untested on actual hardware. Only Canon T7 has been physically verified.
+
+## Test history
+Manual test sessions are tracked in `TESTING.md`. Key entries:
+
+- **2026-07-06 — Tethering reliability (Samsung Galaxy + Canon T7, commit `f55abf5`).**
+  Three cable pull/replug cycles all succeeded on attempt 1 (~800 ms). Single `[APP] launched`
+  per process (no zombie MtpCameraManager instances). Images IMG_3546–3552 → FTP `Worker result
+  SUCCESS`. Pre-fix baseline (commit `dd19d9b`) showed three `[APP] launched` lines per process
+  and three concurrent zombie poll loops requiring an app restart to clear.
 
 ## Key implementation decisions
 - `ImageCapture` use case owned by `MainViewModel`, not the Composable.
