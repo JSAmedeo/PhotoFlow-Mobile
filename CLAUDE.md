@@ -293,7 +293,7 @@ style.
 
 ### Preventing duplicate USB claims
 A single `MtpCameraManager` instance must exist, and only one coroutine may claim the
-USB interface. Four layers of protection, in the order they were needed:
+USB interface. Five layers of protection, in the order they were needed:
 
 1. **Single MainViewModel instance.** `NavGraph.kt` scopes `MainViewModel` to the
    Activity via `viewModel(activity)` with
@@ -303,12 +303,20 @@ USB interface. Four layers of protection, in the order they were needed:
    `MainViewModel` instances, two `MtpCameraManager`s, and two coroutines racing to
    `claimInterface(force = true)` on the same USB interface. Never revert to the default
    here, and apply the same pattern to any future Activity-scoped VM.
-2. **`synchronized(this)` flag** in `connectOrRequestPermission` — atomic check-and-set
+2. **`android:launchMode="singleTop"` on `MainActivity`.** Without this, every
+   `USB_DEVICE_ATTACHED` broadcast delivered while the app is running creates a *new*
+   `MainActivity` instance — a new `ViewModelStore`, a new `MainViewModel`, and a new
+   `MtpCameraManager`. Observed in production: three `[APP] launched` log entries within
+   15 s in the same PID, three racing PTP connections, three zombie poll loops, all
+   commands returning `sent=-1`. `singleTop` routes the intent to `onNewIntent()` on the
+   existing instance instead. `MainActivity.onNewIntent()` already handles the attach
+   event correctly. Do not change the launchMode.
+3. **`synchronized(this)` flag** in `connectOrRequestPermission` — atomic check-and-set
    of `isConnecting` so multiple attach-path callers collapse to one launch.
-3. **`connectionMutex.withLock`** wraps all of `openConnection`. If a second coroutine
+4. **`connectionMutex.withLock`** wraps all of `openConnection`. If a second coroutine
    does slip past the flag, it waits here, and the early `if (core != null) return`
    guard stops it from claiming a second time.
-4. **Single-threaded USB dispatcher.** `usbDispatcher` is backed by a dedicated
+5. **Single-threaded USB dispatcher.** `usbDispatcher` is backed by a dedicated
    `Executors.newSingleThreadExecutor { Thread("PhotoFlow-USB") }`. Every USB I/O
    operation (open, init, poll, download, close) runs on that one thread. Samsung's USB
    stack appears to break if `bulkTransfer` calls on the same `UsbDeviceConnection` cross
@@ -371,6 +379,29 @@ Six fixes are in place:
    retry without requiring an app restart.
 
 **HARD RULES for the USB permission subsystem — do not violate without re-testing on both devices:**
+
+- **Do not change `android:launchMode` away from `singleTop` on `MainActivity`.** This is the
+  root fix for the multi-MtpCameraManager zombie problem. With `standard` launchMode, plugging
+  the camera in while the app is running creates a new Activity instance, a new ViewModel, and
+  a new MtpCameraManager that races the existing one for the USB interface. The result is zombie
+  poll loops that spam `sent=-1` indefinitely and require an app restart. `singleTop` routes
+  `USB_DEVICE_ATTACHED` to `onNewIntent()` on the existing Activity instead.
+
+- **Do not remove `permissionDenied = true` from the exhausted-retry path in `openConnection`.**
+  After all retry attempts fail (e.g. camera in bad state from a prior competing connection),
+  this flag prevents the 5-second foreground rescan from immediately queueing another attempt.
+  Without it, each failure triggers a new rescan → new `openConnection` (holds `connectionMutex`
+  for up to ~9 s across 3 retries) → another failure → another rescan, compounding zombie
+  sessions that poison the USB endpoint. Recovery: physical cable re-plug (`onDeviceDetached`
+  resets `permissionDenied`) or mode switch (`resetAndRescan` resets it). Critically,
+  `connectOrRequestPermission()` does NOT check `permissionDenied` — so
+  `USB_DEVICE_ATTACHED` → `onDeviceAttached()` still retries correctly on replug.
+
+- **Do not place the `DISCONNECTED`-status check before the `attempt > 0` guard in the
+  `openConnection` retry loop.** The initial value of `_status` is `DISCONNECTED`. Checking
+  `_status.value.state == DISCONNECTED` on attempt 0 aborts every connection attempt before
+  it ever starts. The check is valid only for attempt > 0, where `closeConnection()` may
+  have set DISCONNECTED while the coroutine was suspended in `delay(CONNECT_RETRY_DELAY_MS)`.
 
 - **Do not remove `resetAndRescan()`.** It is the only recovery path when `permissionDenied` is
   set from an accidental dialog swipe or a suppressed-dialog first launch. Without it, the user
@@ -512,6 +543,9 @@ At a glance, the operator should always be able to tell:
 - Do not add delays shorter than 800 ms after `claimInterface` on Samsung devices — the system MTP daemon needs that time to release the USB interface
 - Do not raise `FIRST_CHUNK_SIZE` or `CHUNK_SIZE` in `PtpConnection` without re-testing on Samsung One UI — oversize first-read requests break the endpoint silently
 - Do not use the default `viewModel()` for `MainScreen` in `NavGraph.kt` — it must be `viewModel(activity)` with `activity = LocalContext.current as ComponentActivity`, otherwise a second `MtpCameraManager` will be created and race for the USB interface
+- Do not change `android:launchMode` away from `singleTop` on `MainActivity` — `standard` launchMode causes Android to create a new Activity instance on every `USB_DEVICE_ATTACHED`, producing a second MtpCameraManager that races the existing one; observed as 3× `[APP] launched` in the same PID, zombie poll loops, all USB commands returning `sent=-1`
+- Do not remove `permissionDenied = true` from the exhausted-retry path in `openConnection` — without it, each failure causes the foreground rescan to immediately retry, cascading into compounding zombie PTP sessions; see HARD RULES above for the full recovery contract
+- Do not place the `_status == DISCONNECTED` check before the `attempt > 0` guard in `openConnection` — `_status` starts as `DISCONNECTED`, so checking it unconditionally aborts every connection before it starts; check only on retries (attempt > 0) where `closeConnection()` may have set it while suspended
 - Do not move USB I/O off `usbDispatcher` (the `PhotoFlow-USB` single-thread executor) — `bulkTransfer` calls crossing threads on the same `UsbDeviceConnection` break silently on Samsung
 - Do not "fix" the 1–3 s post-shot import latency on the Canon T7 by tightening the poll cadence — Canon `GetEvent` is silent on the T7 and the diff-poll is the actual delivery path
 - Do not use an implicit `Intent(ACTION)` inside a USB permission PendingIntent — always add `.setPackage(context.packageName)` to make it explicit; implicit broadcasts are silently dropped by `RECEIVER_NOT_EXPORTED` receivers on API 26+

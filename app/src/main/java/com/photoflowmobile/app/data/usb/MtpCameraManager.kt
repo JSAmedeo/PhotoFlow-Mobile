@@ -42,10 +42,12 @@ class MtpCameraManager(
         private const val TAG = "PhotoFlow/Tether"
         private const val PIPELINE = "PhotoFlow/Pipeline"
         private const val ACTION_USB_PERMISSION = "com.photoflowmobile.USB_PERMISSION"
-        private const val EVENT_POLL_MS        = 500L    // adapter event poll cadence
-        private const val FALLBACK_POLL_MS     = 3_000L  // object-handle diff fallback cadence
-        private const val HEARTBEAT_MS         = 30_000L
-        private const val FOREGROUND_RESCAN_MS = 5_000L  // hot-plug poll while app is in foreground
+        private const val EVENT_POLL_MS          = 500L    // adapter event poll cadence
+        private const val FALLBACK_POLL_MS       = 3_000L  // object-handle diff fallback cadence
+        private const val HEARTBEAT_MS           = 30_000L
+        private const val FOREGROUND_RESCAN_MS   = 5_000L  // hot-plug poll while app is in foreground
+        private const val MAX_CONNECT_ATTEMPTS   = 3       // retries inside openConnection
+        private const val CONNECT_RETRY_DELAY_MS = 3_000L  // delay between openConnection attempts
     }
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -83,7 +85,15 @@ class MtpCameraManager(
             val device = extractDevice(intent) ?: return
             if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                 Log.d(TAG, "Permission granted for ${device.productName}")
-                scope.launch(usbDispatcher) { openConnection(device) }
+                // Guard: if a concurrent connection attempt already succeeded while the permission
+                // dialog was pending (e.g. init{} scan raced with resetAndRescan), ignore the
+                // stale grant so we don't open a second UsbDeviceConnection and reset endpoints.
+                if (core != null) {
+                    Log.d(TAG, "Permission granted but already connected — ignoring stale grant")
+                    synchronized(this@MtpCameraManager) { isConnecting = false }
+                } else {
+                    scope.launch(usbDispatcher) { openConnection(device) }
+                }
             } else {
                 synchronized(this@MtpCameraManager) { isConnecting = false; permissionDenied = true }
                 Log.w(TAG, "Permission denied for ${device.productName}")
@@ -239,61 +249,117 @@ class MtpCameraManager(
         Log.i(TAG, "Opening PTP session with ${device.productName} " +
                 "VID=0x${device.vendorId.toString(16)} PID=0x${device.productId.toString(16)} " +
                 "adapter=${vendor.name}")
-        _status.value = TetheredStatus(TetheredState.CONNECTING, message = "Connecting…")
 
-        try {
-            val usbConn = usbManager.openDevice(device)
-            if (usbConn == null) {
-                Log.e(TAG, "openDevice returned null")
-                _status.value = TetheredStatus(TetheredState.ERROR, message = "Failed to open USB device")
-                synchronized(this) { isConnecting = false }
-                return
+        // Retry loop: up to MAX_CONNECT_ATTEMPTS total tries, CONNECT_RETRY_DELAY_MS apart.
+        // Motivation: on Samsung One UI (and occasionally Motorola), the first attempt after
+        // the USB permission dialog fires before the system MTP daemon has fully backed off.
+        // openDevice() can return null, or the PTP session open can fail, leaving the device
+        // absent from usbManager.deviceList so the 5 s rescan never retries. Retrying here
+        // (inside the mutex, on usbDispatcher) avoids that dead-end without changing any of
+        // the existing hardware timing constants inside PtpConnection.
+        var lastError = ""
+        repeat(MAX_CONNECT_ATTEMPTS) { attempt ->
+            if (core != null) return@repeat   // succeeded on a previous iteration
+
+            if (attempt > 0) {
+                // Check for detach before waiting — closeConnection() may have set DISCONNECTED
+                // while the previous attempt was running. On attempt 0 this check would
+                // always fire (initial _status is DISCONNECTED), so skip it there.
+                if (_status.value.state == TetheredState.DISCONNECTED) {
+                    Log.i(TAG, "openConnection: device disconnected — aborting retry loop")
+                    return@withLock
+                }
+                Log.i(TAG, "openConnection: retry $attempt/$MAX_CONNECT_ATTEMPTS after ${CONNECT_RETRY_DELAY_MS}ms")
+                _status.value = TetheredStatus(TetheredState.CONNECTING,
+                    message = "Retrying… (attempt ${attempt + 1})")
+                delay(CONNECT_RETRY_DELAY_MS)
+                // Re-check after the delay — device may have disconnected during the wait.
+                if (core != null) return@repeat
+                if (_status.value.state == TetheredState.DISCONNECTED) {
+                    Log.i(TAG, "openConnection: device disconnected during retry delay — aborting")
+                    return@withLock
+                }
+            } else {
+                _status.value = TetheredStatus(TetheredState.CONNECTING, message = "Connecting…")
             }
 
-            val iface = (0 until device.interfaceCount)
-                .map { device.getInterface(it) }
-                .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_STILL_IMAGE }
+            try {
+                // Refresh UsbDevice from the live deviceList. The original object passed to
+                // openConnection can become stale after a brief cable disconnect/reconnect —
+                // Android creates a new device node on reattach and openDevice() on the old
+                // object returns null silently. If the camera is no longer in the list at
+                // all, skip this attempt; the DISCONNECTED check above will catch it on the
+                // next iteration (or the retry delay will consume the remaining wait time).
+                val currentDevice = usbManager.deviceList.values
+                    .firstOrNull { it.vendorId == device.vendorId && it.productId == device.productId }
+                    ?: run {
+                        lastError = "Device not found in USB device list"
+                        Log.w(TAG, "Device absent from usbManager.deviceList (attempt ${attempt + 1})")
+                        return@repeat
+                    }
+                val usbConn = usbManager.openDevice(currentDevice)
+                if (usbConn == null) {
+                    lastError = "Failed to open USB device"
+                    Log.w(TAG, "openDevice returned null (attempt ${attempt + 1})")
+                    return@repeat
+                }
 
-            if (iface == null) {
-                usbConn.close()
-                Log.e(TAG, "No PTP interface (class 6) found on device")
-                _status.value = TetheredStatus(TetheredState.ERROR, message = "Camera PTP interface not found")
-                synchronized(this) { isConnecting = false }
-                return
+                val iface = (0 until currentDevice.interfaceCount)
+                    .map { currentDevice.getInterface(it) }
+                    .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_STILL_IMAGE }
+
+                if (iface == null) {
+                    usbConn.close()
+                    lastError = "Camera PTP interface not found"
+                    Log.e(TAG, "No PTP interface (class 6) found on device")
+                    return@withLock   // structural — no point retrying
+                }
+
+                val conn = PtpConnection(usbConn, iface)
+                val ptpCore = PtpCore(conn)
+
+                if (!openSessionWithRetry(ptpCore)) {
+                    conn.release(); usbConn.close()
+                    lastError = "Camera refused PTP session"
+                    Log.w(TAG, "openSessionWithRetry failed (attempt ${attempt + 1})")
+                    return@repeat
+                }
+
+                if (!vendor.initialize(ptpCore, conn)) {
+                    Log.w(TAG, "Vendor initialize() reported failure — continuing anyway")
+                }
+
+                ptpConn = conn
+                core    = ptpCore
+                adapter = vendor
+
+                val model = currentDevice.productName ?: vendor.name
+                Log.i(TAG, "Connected: $model (adapter=${vendor.name}) on attempt ${attempt + 1}")
+                Log.i(PIPELINE, "connected: '$model' adapter=${vendor.name} interruptEvents=${conn.hasInterruptEvents}")
+                _status.value = TetheredStatus(TetheredState.CONNECTED, cameraModel = model)
+                startPolling(ptpCore, conn, vendor)
+
+            } catch (e: Exception) {
+                lastError = e.message?.take(80) ?: e.javaClass.simpleName
+                Log.w(TAG, "openConnection attempt ${attempt + 1} threw: $lastError")
             }
+        }
 
-            val conn = PtpConnection(usbConn, iface)
-            val ptpCore = PtpCore(conn)
-
-            // OpenSession, tolerant of "already open" and retrying once with a clean close first.
-            if (!openSessionWithRetry(ptpCore)) {
-                conn.release(); usbConn.close()
-                _status.value = TetheredStatus(TetheredState.ERROR,
-                    message = "Camera refused PTP session — try unplugging and reconnecting")
-                synchronized(this) { isConnecting = false }
-                return
-            }
-
-            if (!vendor.initialize(ptpCore, conn)) {
-                Log.w(TAG, "Vendor initialize() reported failure — continuing anyway")
-            }
-
-            ptpConn = conn
-            core    = ptpCore
-            adapter = vendor
-
-            val model = device.productName ?: vendor.name
-            Log.i(TAG, "Connected: $model (adapter=${vendor.name})")
-            Log.i(PIPELINE, "connected: '$model' adapter=${vendor.name} interruptEvents=${conn.hasInterruptEvents}")
-            _status.value = TetheredStatus(TetheredState.CONNECTED, cameraModel = model)
-
-            startPolling(ptpCore, conn, vendor)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "openConnection threw", e)
+        // All attempts exhausted without success. Set permissionDenied to suppress the
+        // foreground rescan from auto-retrying — the camera or USB stack is in a bad state
+        // (stale PTP session, endpoint poisoned by a competing connection). Only a physical
+        // cable re-plug (onDeviceDetached resets permissionDenied) or explicit mode switch
+        // (resetAndRescan resets it) should trigger a fresh attempt.
+        // connectOrRequestPermission() bypasses this flag, so USB_DEVICE_ATTACHED from a
+        // replug still triggers a retry correctly.
+        if (core == null) {
+            Log.e(TAG, "openConnection failed after $MAX_CONNECT_ATTEMPTS attempts: $lastError")
             _status.value = TetheredStatus(TetheredState.ERROR,
-                message = "Connection error: ${e.message?.take(80) ?: e.javaClass.simpleName}")
-            synchronized(this) { isConnecting = false }
+                message = "$lastError — try unplugging and reconnecting")
+            synchronized(this) {
+                isConnecting = false
+                permissionDenied = true
+            }
         }
     }
 

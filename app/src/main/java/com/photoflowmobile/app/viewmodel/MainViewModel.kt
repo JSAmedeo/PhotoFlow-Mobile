@@ -541,10 +541,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // or isConnecting state and immediately rescan. This handles the first-launch case where
         // the Android CAMERA dialog suppressed the USB dialog, and the accidental-swipe case
         // where permissionDenied was set and the retry loop permanently stopped.
+        //
+        // IMPORTANT: only fires on an explicit NATIVE→TETHERED transition, NOT on the initial
+        // DataStore value. A StateFlow emits its current value to every new collector, so using
+        // .filter { == TETHERED_DSLR }.collect { resetAndRescan() } would fire resetAndRescan()
+        // on every app start/process-death restart — racing with the MtpCameraManager.init{}
+        // device scan that is already in progress. That race clears isConnecting while openConnection
+        // is in its 800ms Samsung sleep, allowing a second openConnection to queue, which then
+        // resets the USB endpoint (SET_INTERFACE + CLEAR_HALT) and poisons both sessions.
+        var prevDeviceMode: DeviceMode? = null
         viewModelScope.launch {
-            deviceMode
-                .filter { it == DeviceMode.TETHERED_DSLR }
-                .collect { mtpCameraManager.resetAndRescan() }
+            deviceMode.collect { mode ->
+                val transitionToTethered = prevDeviceMode != null
+                        && prevDeviceMode != DeviceMode.TETHERED_DSLR
+                        && mode == DeviceMode.TETHERED_DSLR
+                prevDeviceMode = mode
+                if (transitionToTethered) mtpCameraManager.resetAndRescan()
+            }
         }
 
         // Auto-register with cloud API when a CLOUD_API profile becomes active and device is not yet registered
