@@ -382,14 +382,13 @@ private fun LeftPanel(
                 .fillMaxWidth()
                 .height(38.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(LocalAppColors.current.green.copy(alpha = 0.12f))
-                .border(1.dp, LocalAppColors.current.green.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                .background(LocalAppColors.current.green)
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "+ NEW SESSION",
-                color = LocalAppColors.current.green,
+                color = Color.White,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp,
@@ -628,15 +627,14 @@ private fun CenterPanel(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(LocalAppColors.current.blue.copy(alpha = 0.16f))
-                                .border(1.dp, LocalAppColors.current.blue.copy(alpha = 0.70f), RoundedCornerShape(10.dp))
+                                .background(LocalAppColors.current.blue)
                                 .clickable { onCapture() }
                                 .padding(vertical = 10.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 "◉  CAPTURE",
-                                color = LocalAppColors.current.blue,
+                                color = Color.White,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.5.sp
@@ -1413,15 +1411,15 @@ private fun PortraitCenterArea(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, LocalAppColors.current.blue)
-                            .background(LocalAppColors.current.blue.copy(alpha = 0.10f))
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(LocalAppColors.current.blue)
                             .clickable { onCapture() }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             "◉  CAPTURE",
-                            color = LocalAppColors.current.blue,
+                            color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.5.sp
@@ -1449,14 +1447,13 @@ private fun PortraitSessionButtons(
                 .weight(1f)
                 .height(38.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(LocalAppColors.current.green.copy(alpha = 0.12f))
-                .border(1.dp, LocalAppColors.current.green.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                .background(LocalAppColors.current.green)
                 .clickable { onNewSession() },
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "NEW SESSION",
-                color = LocalAppColors.current.green,
+                color = Color.White,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp

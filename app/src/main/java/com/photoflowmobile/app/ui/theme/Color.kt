@@ -16,21 +16,23 @@ data class AppColorScheme(
     val blue: Color,
     val warning: Color,
     val error: Color,
+    val cta: Color,
 )
 
 val darkAppColors = AppColorScheme(
-    background    = Color(0xFF0B0D0F),
-    surface       = Color(0xFF111519),
-    surfaceRaised = Color(0xFF191E24),
-    border        = Color(0xFF1C2228),
-    borderActive  = Color(0xFF262F38),
-    textPrimary   = Color(0xFFF3F7FA),
-    textSecondary = Color(0xFF7B8A96),
-    textDisabled  = Color(0xFF485260),
-    green         = Color(0xFF4DD962),  // vivid mint green — used for status/success
-    blue          = Color(0xFF4DD962),  // mint green as primary accent (replaces steel blue)
+    background    = Color(0xFF2A2D2E),  // warm charcoal
+    surface       = Color(0xFF3D4143),
+    surfaceRaised = Color(0xFF4F5456),
+    border        = Color(0x14FFFFFF),  // rgba(255,255,255,0.08)
+    borderActive  = Color(0x2EFFFFFF),  // rgba(255,255,255,0.18)
+    textPrimary   = Color(0xFFFFFFFF),
+    textSecondary = Color(0xFFC9CDCC),
+    textDisabled  = Color(0xFF8A8F8E),
+    green         = Color(0xFF6FC79A),  // mint — status / active / healthy
+    blue          = Color(0xFF6FC79A),  // mint (same)
     warning       = Color(0xFFFFBB57),
     error         = Color(0xFFE05870),
+    cta           = Color(0xFFE5683D),  // orange — primary action buttons only
 )
 
 val lightAppColors = AppColorScheme(
@@ -43,9 +45,10 @@ val lightAppColors = AppColorScheme(
     textSecondary = Color(0xFF4A5660),
     textDisabled  = Color(0xFF8A949C),
     green         = Color(0xFF1E9E32),
-    blue          = Color(0xFF1E9E32),  // mint green primary in light mode too
+    blue          = Color(0xFF1E9E32),
     warning       = Color(0xFFC07A00),
     error         = Color(0xFF9E1E32),
+    cta           = Color(0xFFD04A1A),
 )
 
 val LocalAppColors = staticCompositionLocalOf { darkAppColors }

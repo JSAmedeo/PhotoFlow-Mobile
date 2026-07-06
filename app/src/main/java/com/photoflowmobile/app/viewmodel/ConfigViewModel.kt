@@ -126,6 +126,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun getFtpPassword(profileId: Long): String = credentialStore.getFtpPassword(profileId)
+
     fun upsertProfile(profile: ConnectionProfile) {
         viewModelScope.launch {
             // Store FTP password in CredentialStore; blank it in Room so it is never persisted plaintext
