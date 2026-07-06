@@ -15,4 +15,4 @@ local.properties
 .cxx
 *.apk
 *.aab
-.claude/
+.claude/settings.local.json
