@@ -1860,13 +1860,17 @@ private fun MissedShotsBanner(
             color = colors.error,
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
+            letterSpacing = 0.5.sp,
+            maxLines = 1
         )
+        // Wraps rather than truncating: "still on the camera card" is the part that tells the
+        // operator the shots are recoverable by hand, so it must never be the half that is cut.
         Text(
-            "Taken while the camera was disconnected — still on the camera card",
+            "Shot while disconnected — still on the camera card",
             color = colors.textPrimary,
             fontSize = 9.sp,
-            maxLines = 1,
+            lineHeight = 11.sp,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
@@ -1912,14 +1916,18 @@ private fun PastSessionBanner(
             color = colors.warning,
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
+            letterSpacing = 0.5.sp,
+            maxLines = 1
         )
+        // Wraps rather than truncating — the session code is user data of unbounded length, and
+        // it is the half that actually identifies where photos are going.
         Text(
             "NEW PHOTOS GO TO $sessionLabel",
             color = colors.textPrimary,
             fontSize = 9.sp,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            lineHeight = 11.sp,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
