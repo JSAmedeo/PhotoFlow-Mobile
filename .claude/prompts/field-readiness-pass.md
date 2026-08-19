@@ -16,6 +16,26 @@ protobuf: `auto_retry_max_count` had been rewritten from `-1` to `3`, and `setti
 was stamped `1` — the upgrade path exercised on an install that actually carried the old value.
 Operator confirmed the FR-1/FR-2 session-activation checks pass.
 
+## Cloud API is shelved (2026-08-18)
+
+Cloud upload is tied to a future project with no current timeline. **FTP is the live transfer
+path** for the field test and for the foreseeable future.
+
+Consequences for this pass:
+
+- **FR-8 needs no further verification.** Its security property — the API key is out of
+  plaintext DataStore and lives only in `CredentialStore` — is confirmed on device. Whether the
+  encrypted copy still authenticates against the backend is untested and no longer urgent,
+  because nothing exercises the cloud path. Re-test it whenever cloud work resumes.
+- The cloud code (`CloudUploadExecutor`, `CloudApiClient`, the cloud services, registration in
+  `MainViewModel.init`) stays in place but dormant: `UploadWorker` only routes to it when the
+  active `ConnectionProfile` is `CLOUD_API`, and registration only fires when such a profile
+  becomes active. Nothing needs removing.
+- **FR-7's practical consequence now lands on FTP.** Exports no longer carry FTP passwords, so
+  provisioning a device by import requires re-entering the password per profile. The import
+  dialog names which ones. This is the change most likely to surprise someone setting up a
+  handset from a saved config file.
+
 ## Build note
 
 Android Studio holds a lock on `app/build/.../R.jar` while it is open, which fails
