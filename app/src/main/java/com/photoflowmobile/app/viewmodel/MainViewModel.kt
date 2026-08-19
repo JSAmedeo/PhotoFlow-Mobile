@@ -403,7 +403,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=***${codeLen}chars")
             try {
                 val appInstance = getApplication<PhotoFlowApplication>()
-                val apiKey = appInstance.credentialStore.getCloudApiKey(fallback = settings.cloudApiKey)
+                val apiKey = appInstance.credentialStore.getCloudApiKey()
                 when (val result = CloudDeviceService.register(
                     CloudApiClient(baseUrl, apiKey),
                     setupCode      = setupCode,

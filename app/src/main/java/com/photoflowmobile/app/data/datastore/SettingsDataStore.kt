@@ -34,6 +34,9 @@ object SettingsKeys {
     val CLOUD_DEVICE_DISPLAY_NAME = stringPreferencesKey("cloud_device_display_name")
     val CLOUD_DEVICE_UUID         = stringPreferencesKey("cloud_device_uuid")
     val CLOUD_DEVICE_ID           = intPreferencesKey("cloud_device_id")
+    // Migration-only. The Cloud API key lives in CredentialStore; this key exists solely so
+    // PhotoFlowApplication can find and clear a plaintext copy left by an older build.
+    // Nothing may write to it.
     val CLOUD_API_KEY             = stringPreferencesKey("cloud_api_key")
     val CLOUD_STATION_NAME        = stringPreferencesKey("cloud_station_name")
 }
@@ -62,7 +65,6 @@ fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     cloudDeviceDisplayName = prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] ?: "",
     cloudDeviceUuid        = prefs[SettingsKeys.CLOUD_DEVICE_UUID]         ?: "",
     cloudDeviceId          = prefs[SettingsKeys.CLOUD_DEVICE_ID]           ?: 0,
-    cloudApiKey            = prefs[SettingsKeys.CLOUD_API_KEY]             ?: "",
     cloudStationName       = prefs[SettingsKeys.CLOUD_STATION_NAME]        ?: ""
 )
 
@@ -88,6 +90,5 @@ fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] = cloudDeviceDisplayName
     prefs[SettingsKeys.CLOUD_DEVICE_UUID]         = cloudDeviceUuid
     prefs[SettingsKeys.CLOUD_DEVICE_ID]           = cloudDeviceId
-    prefs[SettingsKeys.CLOUD_API_KEY]             = cloudApiKey
     prefs[SettingsKeys.CLOUD_STATION_NAME]        = cloudStationName
 }

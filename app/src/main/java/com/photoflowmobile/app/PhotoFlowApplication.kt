@@ -1,6 +1,7 @@
 package com.photoflowmobile.app
 
 import android.app.Application
+import android.util.Log
 import androidx.room.Room
 import com.photoflowmobile.app.data.datastore.SettingsKeys
 import com.photoflowmobile.app.data.datastore.settingsDataStore
@@ -23,6 +24,8 @@ import kotlinx.coroutines.launch
 
 class PhotoFlowApplication : Application() {
 
+    private companion object { const val TAG = "PhotoFlow/App" }
+
     val database: AppDatabase by lazy {
         Room.databaseBuilder(this, AppDatabase::class.java, "photoflow.db")
             .addMigrations(
@@ -39,8 +42,14 @@ class PhotoFlowApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         appScope.launch {
-            migrateSecretsToCredentialStore()
-            migrateSettingsSchema()
+            // Guarded: an uncaught throw here runs on a background coroutine during
+            // Application.onCreate and takes the whole app down at launch. Credential access is
+            // the realistic failure (a Keystore reset or a restored store it cannot decrypt),
+            // and a device that cannot upload is far better than one that will not start.
+            try { migrateSecretsToCredentialStore() }
+            catch (e: Exception) { Log.e(TAG, "Credential migration failed — continuing", e) }
+            try { migrateSettingsSchema() }
+            catch (e: Exception) { Log.e(TAG, "Settings migration failed — continuing", e) }
         }
     }
 
@@ -73,12 +82,18 @@ class PhotoFlowApplication : Application() {
             }
         }
 
-        // Cloud API key: DataStore → CredentialStore
+        // Cloud API key: DataStore → CredentialStore.
+        //
+        // The DataStore entry is cleared whenever it is present, not only when the credential
+        // store happens to be empty. The old conditional meant that once the store held a key,
+        // any plaintext copy written afterwards was never cleaned up again — and an earlier
+        // build rewrote one on every settings save. AppSettings no longer carries the key at
+        // all, so nothing can recreate it, and this sweep removes what older builds left.
         val prefs = settingsDataStore.data.first()
         val apiKey = prefs[SettingsKeys.CLOUD_API_KEY] ?: ""
-        if (apiKey.isNotBlank() && credentialStore.getCloudApiKey().isBlank()) {
-            credentialStore.storeCloudApiKey(apiKey)
-            settingsDataStore.edit { it[SettingsKeys.CLOUD_API_KEY] = "" }
+        if (apiKey.isNotBlank()) {
+            if (credentialStore.getCloudApiKey().isBlank()) credentialStore.storeCloudApiKey(apiKey)
+            settingsDataStore.edit { it.remove(SettingsKeys.CLOUD_API_KEY) }
         }
     }
 }

@@ -81,6 +81,7 @@ fun ConfigScreen(
     val manifestResult by viewModel.manifestResult.collectAsStateWithLifecycle()
     val activeSessionKey by viewModel.activeSessionKey.collectAsStateWithLifecycle()
     val debugRetryState by viewModel.debugRetryState.collectAsStateWithLifecycle()
+    val cloudApiKey by viewModel.cloudApiKey.collectAsStateWithLifecycle()
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -111,13 +112,48 @@ fun ConfigScreen(
                             Text("File saved to:", color = LocalAppColors.current.textSecondary, fontSize = 10.sp)
                             Spacer(Modifier.height(2.dp))
                             Text(result.displayPath, color = LocalAppColors.current.green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Passwords and API keys are not included — this file goes to " +
+                                        "shared storage, so it carries configuration only.",
+                                color = LocalAppColors.current.textSecondary,
+                                fontSize = 9.sp,
+                                lineHeight = 12.sp
+                            )
                         }
                         is SettingsTransferResult.ImportSuccess -> {
                             Text(
-                                "All settings and connection profiles have been loaded successfully.",
+                                "Settings and connection profiles loaded.",
                                 color = LocalAppColors.current.green,
                                 fontSize = 10.sp
                             )
+                            // Exports carry no secrets, so say plainly what still has to be
+                            // entered — otherwise the first upload fails with an auth error.
+                            if (result.profilesNeedingPassword.isNotEmpty() || result.apiKeyNeeded) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Still needed:",
+                                    color = LocalAppColors.current.warning,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (result.profilesNeedingPassword.isNotEmpty()) {
+                                    Text(
+                                        "FTP password for: " + result.profilesNeedingPassword.joinToString(", "),
+                                        color = LocalAppColors.current.textSecondary,
+                                        fontSize = 9.sp,
+                                        lineHeight = 12.sp
+                                    )
+                                }
+                                if (result.apiKeyNeeded) {
+                                    Text(
+                                        "Cloud API key: Settings > General > Cloud API",
+                                        color = LocalAppColors.current.textSecondary,
+                                        fontSize = 9.sp,
+                                        lineHeight = 12.sp
+                                    )
+                                }
+                            }
                         }
                         is SettingsTransferResult.Error -> {
                             Text(result.message, color = LocalAppColors.current.warning, fontSize = 10.sp)
@@ -183,6 +219,8 @@ fun ConfigScreen(
             onFetchManifest = viewModel::fetchManifest,
             debugRetryState = debugRetryState,
             onDebugRetry = viewModel::debugRetryLastUpload,
+            cloudApiKey = cloudApiKey,
+            onCloudApiKeyChange = viewModel::setCloudApiKey,
             onNavigateBack = onNavigateBack
         )
     } else {
@@ -217,6 +255,8 @@ fun ConfigScreen(
                 onFetchManifest = viewModel::fetchManifest,
                 debugRetryState = debugRetryState,
                 onDebugRetry = viewModel::debugRetryLastUpload,
+                cloudApiKey = cloudApiKey,
+                onCloudApiKeyChange = viewModel::setCloudApiKey,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
@@ -246,6 +286,8 @@ private fun PortraitConfigLayout(
     onFetchManifest: (String) -> Unit,
     debugRetryState: String,
     onDebugRetry: () -> Unit,
+    cloudApiKey: String,
+    onCloudApiKeyChange: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     val portraitTabs = listOf(
@@ -299,7 +341,9 @@ private fun PortraitConfigLayout(
                         onRegisterDevice = onRegisterDevice,
                         onFetchManifest = onFetchManifest,
                         debugRetryState = debugRetryState,
-                        onDebugRetry = onDebugRetry
+                        onDebugRetry = onDebugRetry,
+                        cloudApiKey = cloudApiKey,
+                        onCloudApiKeyChange = onCloudApiKeyChange
                     )
                     ConfigSection.CONNECTIONS -> ConnectionsSection(
                         profiles = connectionProfiles,
@@ -892,6 +936,8 @@ private fun ConfigContent(
     onFetchManifest: (String) -> Unit,
     debugRetryState: String,
     onDebugRetry: () -> Unit,
+    cloudApiKey: String,
+    onCloudApiKeyChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -941,7 +987,9 @@ private fun ConfigContent(
                     onRegisterDevice = onRegisterDevice,
                     onFetchManifest = onFetchManifest,
                     debugRetryState = debugRetryState,
-                    onDebugRetry = onDebugRetry
+                    onDebugRetry = onDebugRetry,
+                    cloudApiKey = cloudApiKey,
+                    onCloudApiKeyChange = onCloudApiKeyChange
                 )
                 ConfigSection.ABOUT        -> AboutSection()
             }
@@ -1511,7 +1559,9 @@ private fun GeneralSection(
     onRegisterDevice: () -> Unit,
     onFetchManifest: (String) -> Unit,
     debugRetryState: String,
-    onDebugRetry: () -> Unit
+    onDebugRetry: () -> Unit,
+    cloudApiKey: String,
+    onCloudApiKeyChange: (String) -> Unit
 ) {
     val appColors = LocalAppColors.current
     val context = LocalContext.current
@@ -1768,7 +1818,9 @@ private fun GeneralSection(
                 setupCodeDraft = v
                 onChange(settings.copy(cloudSetupCode = v))
             }
-            var apiKeyDraft by remember(settings.cloudApiKey) { mutableStateOf(settings.cloudApiKey) }
+            // Bound to CredentialStore via onCloudApiKeyChange, not to settings: the key must
+            // never travel through AppSettings, which is persisted to DataStore in plaintext.
+            var apiKeyDraft by remember(cloudApiKey) { mutableStateOf(cloudApiKey) }
             var apiKeyVisible by remember { mutableStateOf(false) }
             ConfigTextField(
                 label = "API Key",
@@ -1785,7 +1837,7 @@ private fun GeneralSection(
                 }
             ) { v ->
                 apiKeyDraft = v
-                onChange(settings.copy(cloudApiKey = v))
+                onCloudApiKeyChange(v)
             }
             var stationNameDraft by remember(settings.cloudStationName) { mutableStateOf(settings.cloudStationName) }
             ConfigTextField("Station Name (optional)", stationNameDraft) { v ->

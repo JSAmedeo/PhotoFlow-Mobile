@@ -43,7 +43,9 @@ data class AppSettings(
     val cloudDeviceDisplayName: String = "",
     val cloudDeviceUuid: String = "",
     val cloudDeviceId: Int = 0,         // 0 = not yet registered
-    val cloudApiKey: String = "",       // staging API key; sent as X-PhotoFlow-Api-Key header
+    // NOTE: the Cloud API key is deliberately NOT a field here. AppSettings is persisted verbatim
+    // to DataStore in plaintext, so carrying the key would recreate the plaintext copy on every
+    // save. It lives only in CredentialStore (Keystore-backed); read it from there.
     val cloudStationName: String = ""   // optional station label sent with registration and uploads
 )
 

@@ -2,6 +2,10 @@
 <!--
   Data extraction rules for API 31+ (cloud-backup and device-transfer).
   Mirrors the exclusions in backup_rules.xml which covers API ≤ 30.
+
+  photoflow_credentials.xml is the EncryptedSharedPreferences store. Android does NOT exclude
+  shared_prefs automatically — see the note in backup_rules.xml for why a restored copy is
+  useless at best and a crash risk at worst.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -9,11 +13,13 @@
         <exclude domain="database" path="photoflow.db-wal" />
         <exclude domain="database" path="photoflow.db-shm" />
         <exclude domain="file" path="datastore" />
+        <exclude domain="sharedpref" path="photoflow_credentials.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="photoflow.db" />
         <exclude domain="database" path="photoflow.db-wal" />
         <exclude domain="database" path="photoflow.db-shm" />
         <exclude domain="file" path="datastore" />
+        <exclude domain="sharedpref" path="photoflow_credentials.xml" />
     </device-transfer>
 </data-extraction-rules>

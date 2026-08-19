@@ -87,7 +87,7 @@ internal object CloudUploadExecutor {
 
         try {
             // Prefer CredentialStore; fall back to DataStore for pre-migration compat
-            val apiKey = app.credentialStore.getCloudApiKey(fallback = settings.cloudApiKey)
+            val apiKey = app.credentialStore.getCloudApiKey()
             val client = CloudApiClient(profile.host, apiKey)
 
             val sessionResult = CloudSessionService.ensureSession(

@@ -5,13 +5,19 @@
 
   Excluding the entire Room database is intentional: a restored backup would contain stale
   upload state (UPLOADING rows, missing local files) that is worse than a clean start.
-  The DataStore file holds the Cloud API key and other sensitive config.
-  The EncryptedSharedPreferences file (photoflow_credentials) is excluded by Android
-  automatically since it lives in the app's private shared_prefs directory.
+  The DataStore file holds cloud config and other settings.
+
+  photoflow_credentials.xml is the EncryptedSharedPreferences store (FTP passwords, cloud API
+  key). It MUST be excluded explicitly — Android does NOT exclude shared_prefs automatically;
+  an app's private shared_prefs directory is exactly what auto-backup captures. The AES master
+  key lives in the hardware Keystore and is not backed up, so a restored copy is ciphertext
+  with no key: at best useless, at worst it makes EncryptedSharedPreferences.create() throw on
+  first launch. CredentialStore recovers from that, but not shipping the broken state is better.
 -->
 <full-backup-content>
     <exclude domain="database" path="photoflow.db" />
     <exclude domain="database" path="photoflow.db-wal" />
     <exclude domain="database" path="photoflow.db-shm" />
     <exclude domain="file" path="datastore" />
+    <exclude domain="sharedpref" path="photoflow_credentials.xml" />
 </full-backup-content>
