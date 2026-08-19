@@ -205,6 +205,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val tetheredStatus: StateFlow<TetheredStatus> = mtpCameraManager.status
     val liveViewFrame: StateFlow<ByteArray?>      = mtpCameraManager.liveViewFrame
 
+    /**
+     * Count of shots that appeared on the camera card while the cable was disconnected and were
+     * therefore never imported. 0 when there is nothing to report.
+     *
+     * This is a warning only — the images are not recovered. See "disconnected-shot recovery" in
+     * .claude/prompts/field-readiness-pass.md for the deferred feature that would import them.
+     */
+    val missedWhileDisconnected: StateFlow<Int> = mtpCameraManager.missedWhileDisconnected
+    fun dismissMissedWarning() = mtpCameraManager.dismissMissedWarning()
+
     // ── No-session prompt ─────────────────────────────────────────────────────
 
     private val _showNoSessionPrompt = MutableStateFlow(false)

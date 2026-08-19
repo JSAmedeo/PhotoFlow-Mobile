@@ -118,6 +118,7 @@ fun MainScreen(
     val showNoSessionPrompt by viewModel.showNoSessionPrompt.collectAsStateWithLifecycle()
     val noSessionsExist by viewModel.noSessionsExist.collectAsStateWithLifecycle()
     val pastSessionActive by viewModel.pastSessionActive.collectAsStateWithLifecycle()
+    val missedWhileDisconnected by viewModel.missedWhileDisconnected.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         // Collect rather than sample .value — Room can take 2-3 s on first load.
@@ -180,6 +181,14 @@ fun MainScreen(
             PastSessionBanner(
                 sessionLabel = activeSession?.barcode ?: "—",
                 onGoToNewest = { viewModel.activateNewestSession() }
+            )
+        }
+        // Data loss, so it sits at top level rather than inside TetheredPanel — the panel's
+        // guidance overlay hides once images are showing, which is exactly when this matters.
+        if (missedWhileDisconnected > 0) {
+            MissedShotsBanner(
+                count = missedWhileDisconnected,
+                onDismiss = { viewModel.dismissMissedWarning() }
             )
         }
         if (isPortrait) {
@@ -1818,6 +1827,62 @@ private fun VerticalScrollbarIndicator(listState: LazyListState, color: Color, m
             )
         }
     )
+}
+
+/**
+ * Shown when shots appeared on the camera card while the cable was disconnected.
+ *
+ * Those frames are already on the card at reconnect, so the poll loop seeds them as pre-existing
+ * and never imports them. This banner does not recover them — it exists so the loss is visible
+ * rather than silent, since an operator would otherwise finish a session short without knowing.
+ * The recovery-import feature is tracked in .claude/prompts/field-readiness-pass.md.
+ *
+ * Uses `error` rather than `warning` so it stays distinguishable from [PastSessionBanner] when
+ * both are on screen at once.
+ */
+@Composable
+private fun MissedShotsBanner(
+    count: Int,
+    onDismiss: () -> Unit = {}
+) {
+    val colors = LocalAppColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.error.copy(alpha = 0.16f))
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        StatusDot(color = colors.error, size = 6.dp)
+        Text(
+            if (count == 1) "1 PHOTO NOT IMPORTED" else "$count PHOTOS NOT IMPORTED",
+            color = colors.error,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+        Text(
+            "Taken while the camera was disconnected — still on the camera card",
+            color = colors.textPrimary,
+            fontSize = 9.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "DISMISS",
+            color = colors.error,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .border(1.dp, colors.error.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                .clickable { onDismiss() }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
 }
 
 /**

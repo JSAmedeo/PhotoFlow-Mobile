@@ -73,6 +73,34 @@ class MtpCameraManager(
     // auto-reconnecting and asks for a cable replug instead of thrashing the USB stack.
     @Volatile private var consecutivePollFailures = 0
 
+    // ── Missed-shot detection ─────────────────────────────────────────────────
+    //
+    // The poll loop seeds knownHandles with everything already on the card, so only shots taken
+    // *after* a connection are imported. That means a frame shot while the cable is unseated is
+    // silently dropped: on reconnect it is already on the card, so it counts as pre-existing.
+    // Observed 2026-08-18 — a test frame produced `seeded: 320` then `seeded: 321` across a
+    // replug and was never imported, with nothing on screen to say so.
+    //
+    // This does not recover those shots (see "disconnected-shot recovery" in
+    // .claude/prompts/field-readiness-pass.md for that feature). It only makes the loss visible,
+    // by comparing the object count at connect against the count we were tracking when the
+    // previous session ended.
+    //
+    // Deliberately approximate. It is a count comparison, not an identity check, so:
+    //   - deleting images on the camera between connections can mask a missed shot
+    //   - swapping in a different card will report a large bogus number
+    //   - the baseline lives in memory, so a disconnect spanning an app restart reports nothing
+    // All three are acceptable for a warning. Do not build the recovery feature on this signal —
+    // that needs per-file identity, not counts.
+    @Volatile private var lastKnownHandleCount = -1   // -1 = no previous session to compare against
+
+    private val _missedWhileDisconnected = MutableStateFlow(0)
+    /** Shots that appeared on the card while disconnected. 0 when there is nothing to report. */
+    val missedWhileDisconnected: StateFlow<Int> = _missedWhileDisconnected
+
+    /** Clears the missed-shot warning once the operator has acknowledged it. */
+    fun dismissMissedWarning() { _missedWhileDisconnected.value = 0 }
+
     private val connectionMutex = Mutex()
 
     // Every bulkTransfer on a UsbDeviceConnection must happen on the thread that set up the
@@ -429,8 +457,21 @@ class MtpCameraManager(
             val knownHandles = HashSet<Int>()
             try {
                 core.getImageObjectHandles().forEach { knownHandles.add(it) }
-                Log.i(PIPELINE, "seeded: ${knownHandles.size} pre-existing objects on card " +
+                val seeded = knownHandles.size
+                Log.i(PIPELINE, "seeded: $seeded pre-existing objects on card " +
                         "(only new shots will be imported)")
+
+                // Anything the card gained since the previous session ended was shot while we
+                // were disconnected, and the seed above has just marked it as pre-existing —
+                // it will never import. Surface that instead of losing it silently.
+                val baseline = lastKnownHandleCount
+                if (baseline >= 0 && seeded > baseline) {
+                    val missed = seeded - baseline
+                    _missedWhileDisconnected.value = missed
+                    Log.w(PIPELINE, "missed-while-disconnected: $missed shot(s) appeared on the " +
+                            "card while disconnected (was $baseline, now $seeded) — not imported")
+                }
+                lastKnownHandleCount = seeded
             } catch (e: Exception) {
                 Log.w(TAG, "Could not seed known handles", e)
             }
@@ -509,6 +550,11 @@ class MtpCameraManager(
                         Log.i(PIPELINE, "heartbeat: adapter=${adapter.name} polls=$pollCount " +
                                 "delivered=$deliveredCount known=${knownHandles.size}")
                     }
+
+                    // Keep the missed-shot baseline current. knownHandles grows as images are
+                    // imported, so the next connect must compare its seed against where this
+                    // session actually ended, not against the count it started with.
+                    lastKnownHandleCount = knownHandles.size
                 } catch (e: CancellationException) {
                     // closeConnection() cancelled us — a normal disconnect, not a fault. Let it
                     // propagate so the recovery path below does not run and clobber the status.
