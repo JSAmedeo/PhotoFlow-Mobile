@@ -69,6 +69,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dataStore = application.settingsDataStore
     private val db = (application as PhotoFlowApplication).database
     private val repository = SessionRepository(
+        db = db,
         sessionDao = db.sessionDao(),
         sessionImageDao = db.sessionImageDao()
     )
@@ -138,11 +139,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .map { sessions -> sessions.firstOrNull { it.status == "active" } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val _overrideSessionId = MutableStateFlow<Long?>(null)
+    // Selection IS activation. There is no separate "viewing" session: tapping a row in Session
+    // History activates that session (see selectSession), so every consumer of selectedSessionId
+    // — thumbnails, review pane, shot count — follows the one active session, and both capture
+    // paths write to it. An earlier override-based model let tethered shots land in a session the
+    // operator was merely reviewing.
+    val selectedSessionId: StateFlow<Long?> = activeSession
+        .map { it?.id }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val selectedSessionId: StateFlow<Long?> = combine(_overrideSessionId, activeSession) { override, active ->
-        override ?: active?.id
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    // True when the active session is not the most recently started one — i.e. the operator has
+    // deliberately switched capture back to an earlier session. Drives the MainScreen banner so a
+    // stray tap in Session History can never silently misfile shots.
+    val pastSessionActive: StateFlow<Boolean> = repository.getAllSessions()
+        .map { sessions ->
+            val active = sessions.firstOrNull { it.status == "active" } ?: return@map false
+            val newest = sessions.maxByOrNull { it.startTime } ?: return@map false
+            active.id != newest.id
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val transferQueue: StateFlow<List<SessionImage>> = repository.getTransferQueue()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -178,13 +194,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectReviewImage(imageId: Long) { _reviewImageId.value = imageId }
 
-    val selectedSession: StateFlow<Session?> = selectedSessionId
-        .flatMapLatest { id ->
-            if (id != null) repository.getAllSessions().map { sessions -> sessions.firstOrNull { it.id == id } }
-            else flowOf(null)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
     // ── Tethered DSLR (USB MTP) ───────────────────────────────────────────────
 
     private val mtpCameraManager = MtpCameraManager(
@@ -212,7 +221,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         pipelineLog("[IMAGE] detected: $cameraFilename (${data.size / 1024}KB)")
 
-        val session = selectedSession.value
+        // Read straight from Room, not from a WhileSubscribed StateFlow: this path runs on the
+        // USB poll loop and may fire while the app is backgrounded with no UI subscribed, where
+        // `.value` would be stale or still null.
+        val session = repository.getActiveSession()
         if (session == null) {
             Log.w(PIPELINE_TAG, "[IMAGE] dropped — no active session")
             return
@@ -487,20 +499,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Session started / completed
-        var prevActiveId: Long? = null
+        // Session started / switched / completed
         var prevActiveSession: Session? = null
         viewModelScope.launch {
             activeSession.collect { session ->
-                if (session?.id != prevActiveId && prevActiveId != null) {
-                    _overrideSessionId.value = null
+                val prev = prevActiveSession
+                when {
+                    session != null && prev == null -> {
+                        pipelineLog("[SESSION] started: barcode=${session.barcode}")
+                        _showNoSessionPrompt.value = false
+                    }
+                    // Switching straight from one session to another happens when the operator
+                    // picks an earlier session in Session History, or re-scans a known card.
+                    session != null && prev != null && session.id != prev.id -> {
+                        pipelineLog("[SESSION] switched: barcode=${prev.barcode} -> ${session.barcode}")
+                        _showNoSessionPrompt.value = false
+                    }
+                    session == null && prev != null ->
+                        pipelineLog("[SESSION] completed: barcode=${prev.barcode}")
                 }
-                if (session != null && prevActiveSession == null) {
-                    pipelineLog("[SESSION] started: barcode=${session.barcode}")
-                    _showNoSessionPrompt.value = false
-                } else if (session == null && prevActiveSession != null)
-                    pipelineLog("[SESSION] completed: barcode=${prevActiveSession!!.barcode}")
-                prevActiveId = session?.id
                 prevActiveSession = session
             }
         }
@@ -572,8 +589,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
+    /**
+     * Makes [sessionId] the active session.
+     *
+     * Selection is activation: the operator may need to add a shot to an earlier session, so
+     * picking one in Session History moves capture there — both native and tethered. MainScreen
+     * shows a persistent banner ([pastSessionActive]) whenever the active session is not the
+     * newest, so this can never happen invisibly.
+     */
     fun selectSession(sessionId: Long) {
-        _overrideSessionId.value = sessionId
+        viewModelScope.launch { repository.activateSession(sessionId) }
+    }
+
+    /** Activates the most recently started session — backs the banner's GO TO NEWEST action. */
+    fun activateNewestSession() {
+        viewModelScope.launch {
+            val newest = repository.getAllSessions().first().maxByOrNull { it.startTime } ?: return@launch
+            repository.activateSession(newest.id)
+        }
     }
 
     fun forceRetry(imageId: Long) {

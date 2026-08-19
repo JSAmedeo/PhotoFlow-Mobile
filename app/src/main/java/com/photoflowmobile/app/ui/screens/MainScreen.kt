@@ -115,9 +115,9 @@ fun MainScreen(
             com.photoflowmobile.app.data.model.OrientationLock.PORTRAIT_180  -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
         }
     }
-    val selectedSession by viewModel.selectedSession.collectAsStateWithLifecycle()
     val showNoSessionPrompt by viewModel.showNoSessionPrompt.collectAsStateWithLifecycle()
     val noSessionsExist by viewModel.noSessionsExist.collectAsStateWithLifecycle()
+    val pastSessionActive by viewModel.pastSessionActive.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         // Collect rather than sample .value — Room can take 2-3 s on first load.
@@ -174,6 +174,14 @@ fun MainScreen(
             transferQueue = transferQueue,
             onRetry = { viewModel.forceRetry(it) }
         )
+        // Directly under the top bar in both orientations: capture follows the active session,
+        // so whenever that is not the newest session the operator must be able to see it.
+        if (pastSessionActive) {
+            PastSessionBanner(
+                sessionLabel = activeSession?.barcode ?: "—",
+                onGoToNewest = { viewModel.activateNewestSession() }
+            )
+        }
         if (isPortrait) {
             PortraitSessionButtons(
                 onNewSession = onNewSession,
@@ -191,7 +199,7 @@ fun MainScreen(
             PortraitThumbnailRail(
                 sessionImages = sessionImages,
                 selectedImageId = reviewImage?.id,
-                activeSession = selectedSession ?: activeSession,
+                activeSession = activeSession,
                 onImageSelected = { viewModel.selectReviewImage(it) }
             )
             PortraitBottomBar(
@@ -233,7 +241,7 @@ fun MainScreen(
             }
             BottomBar(
                 deviceMode = deviceMode,
-                activeSession = selectedSession ?: activeSession,
+                activeSession = activeSession,
                 connectionProfiles = connectionProfiles,
                 activeConnection = activeConnection,
                 onConnectionSelected = { viewModel.setActiveConnection(it) }
@@ -1810,6 +1818,59 @@ private fun VerticalScrollbarIndicator(listState: LazyListState, color: Color, m
             )
         }
     )
+}
+
+/**
+ * Shown whenever the active session is not the most recently started one.
+ *
+ * Selecting a session in Session History activates it, so new photos — native and tethered —
+ * are filed there. This banner is the standing signal that capture has moved, and its action
+ * is the one-tap way back to the newest session.
+ */
+@Composable
+private fun PastSessionBanner(
+    sessionLabel: String,
+    onGoToNewest: () -> Unit = {}
+) {
+    val colors = LocalAppColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.warning.copy(alpha = 0.16f))
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        StatusDot(color = colors.warning, size = 6.dp)
+        Text(
+            "VIEWING PAST SESSION",
+            color = colors.warning,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+        Text(
+            "NEW PHOTOS GO TO $sessionLabel",
+            color = colors.textPrimary,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "GO TO NEWEST",
+            color = colors.warning,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .border(1.dp, colors.warning.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                .clickable { onGoToNewest() }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
 }
 
 @Composable
