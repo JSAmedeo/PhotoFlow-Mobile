@@ -48,6 +48,8 @@ class MtpCameraManager(
         private const val FOREGROUND_RESCAN_MS   = 5_000L  // hot-plug poll while app is in foreground
         private const val MAX_CONNECT_ATTEMPTS   = 3       // retries inside openConnection
         private const val CONNECT_RETRY_DELAY_MS = 3_000L  // delay between openConnection attempts
+        private const val MAX_DOWNLOAD_ATTEMPTS  = 3       // per-handle download retries
+        private const val MAX_POLL_FAILURES      = 3       // consecutive poll-loop deaths before giving up
     }
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -65,6 +67,11 @@ class MtpCameraManager(
     @Volatile private var isConnecting = false
     @Volatile private var permissionDenied = false
     private var pollingJob: Job? = null
+
+    // Consecutive poll-loop deaths with no sign of a healthy link in between. Reset by a
+    // delivered image or a clean heartbeat; at MAX_POLL_FAILURES the manager stops
+    // auto-reconnecting and asks for a cable replug instead of thrashing the USB stack.
+    @Volatile private var consecutivePollFailures = 0
 
     private val connectionMutex = Mutex()
 
@@ -144,6 +151,7 @@ class MtpCameraManager(
             if (core != null) return  // already connected
             permissionDenied = false
             isConnecting = false
+            consecutivePollFailures = 0   // explicit user action is a clean slate
         }
         Log.i(TAG, "resetAndRescan: clearing stale connection state, rescanning")
         rescanForAttachedCamera()
@@ -171,6 +179,7 @@ class MtpCameraManager(
                 "VID=0x${device.vendorId.toString(16)} PID=0x${device.productId.toString(16)}")
         if (isPtpDevice(device)) {
             permissionDenied = false  // re-plug → allow re-asking on next rescan
+            consecutivePollFailures = 0   // physical replug is a clean slate
             closeConnection()
         }
     }
@@ -430,6 +439,33 @@ class MtpCameraManager(
             var lastHeartbeat    = System.currentTimeMillis()
             var pollCount        = 0
             var deliveredCount   = 0
+            var failedWithError  = false
+
+            // Per-handle download attempt counter. A handle whose download fails is dropped from
+            // knownHandles so the diff-poll re-offers it on the next pass — otherwise a shot lost
+            // to a transient bus error is lost permanently. Capped so one genuinely unreadable
+            // object cannot be retried forever.
+            val failedAttempts = HashMap<Int, Int>()
+
+            suspend fun attemptDelivery(handle: Int) {
+                val hex = "0x${handle.toString(16)}"
+                if (downloadAndDeliver(core, handle)) {
+                    deliveredCount++
+                    failedAttempts.remove(handle)
+                    consecutivePollFailures = 0   // a delivered image proves the link is healthy
+                    return
+                }
+                val attempts = (failedAttempts[handle] ?: 0) + 1
+                if (attempts >= MAX_DOWNLOAD_ATTEMPTS) {
+                    failedAttempts.remove(handle)
+                    Log.e(PIPELINE, "download: giving up on handle=$hex after $attempts attempts")
+                } else {
+                    failedAttempts[handle] = attempts
+                    knownHandles.remove(handle)
+                    Log.w(PIPELINE, "download: failed handle=$hex " +
+                            "(attempt $attempts/$MAX_DOWNLOAD_ATTEMPTS) — retrying on next poll")
+                }
+            }
 
             while (isActive) {
                 try {
@@ -443,7 +479,7 @@ class MtpCameraManager(
                     }
                     for (handle in fromAdapter) {
                         if (knownHandles.add(handle)) {
-                            if (downloadAndDeliver(core, handle)) deliveredCount++
+                            attemptDelivery(handle)
                         } else {
                             Log.d(PIPELINE, "skip: handle=0x${handle.toString(16)} already known")
                         }
@@ -459,7 +495,7 @@ class MtpCameraManager(
                             Log.i(PIPELINE, "fallback-poll: ${newOnes.size} new handle(s) missed by ${adapter.name}: " +
                                     newOnes.joinToString { "0x${it.toString(16)}" })
                             for (handle in newOnes) {
-                                if (downloadAndDeliver(core, handle)) deliveredCount++
+                                attemptDelivery(handle)
                             }
                         }
                     }
@@ -467,9 +503,16 @@ class MtpCameraManager(
                     // 3. Heartbeat: confirm loop is alive even when nothing's happening
                     if (now - lastHeartbeat >= HEARTBEAT_MS) {
                         lastHeartbeat = now
+                        // A full heartbeat interval of clean polling means the link recovered,
+                        // so earlier failures should not count toward the give-up threshold.
+                        consecutivePollFailures = 0
                         Log.i(PIPELINE, "heartbeat: adapter=${adapter.name} polls=$pollCount " +
                                 "delivered=$deliveredCount known=${knownHandles.size}")
                     }
+                } catch (e: CancellationException) {
+                    // closeConnection() cancelled us — a normal disconnect, not a fault. Let it
+                    // propagate so the recovery path below does not run and clobber the status.
+                    throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Poll loop error", e)
                     Log.e(PIPELINE, "poll-loop FAILED after $pollCount polls / $deliveredCount delivered", e)
@@ -477,12 +520,58 @@ class MtpCameraManager(
                         _status.value = TetheredStatus(TetheredState.ERROR,
                             message = "Camera lost: ${e.message?.take(80) ?: "unknown error"}")
                     }
+                    failedWithError = true
                     break
                 }
                 delay(EVENT_POLL_MS)
             }
             Log.d(TAG, "Poll loop exited")
+
+            // The loop used to just stop here, leaving core/ptpConn non-null and isConnecting
+            // true — and both rescanForAttachedCamera() and connectOrRequestPermission() bail out
+            // when core != null, so nothing could ever reconnect. A camera that slept or glitched
+            // without emitting USB_DEVICE_DETACHED left tethering dead for the rest of the session
+            // with no on-screen remedy. Release the session so the 5 s rescan can re-establish.
+            if (failedWithError) {
+                teardownAfterPollFailure()
+                val failures = ++consecutivePollFailures
+                if (failures >= MAX_POLL_FAILURES) {
+                    // Repeated immediate failures mean reconnecting is not working. Stop the
+                    // rescan from cycling; a replug (onDeviceDetached) or a mode switch
+                    // (resetAndRescan) clears permissionDenied and re-enables it.
+                    synchronized(this@MtpCameraManager) { permissionDenied = true }
+                    _status.value = TetheredStatus(TetheredState.ERROR,
+                        message = "Camera lost — unplug and replug the cable")
+                    Log.e(TAG, "Poll loop failed $failures times in a row — auto-reconnect disabled")
+                } else {
+                    Log.i(TAG, "Poll loop failed ($failures/$MAX_POLL_FAILURES) — " +
+                            "session released, rescan will reconnect")
+                }
+            }
         }
+    }
+
+    /**
+     * Releases the PTP session after the poll loop has died.
+     *
+     * Deliberately not [closeConnection]: that cancels [pollingJob], which is the very coroutine
+     * this runs on, so the teardown would cancel itself partway through. It also leaves
+     * `permissionDenied` untouched — the caller decides whether the foreground rescan should be
+     * allowed to reconnect, based on how many times the loop has failed in a row.
+     */
+    private fun teardownAfterPollFailure() {
+        val a = adapter; val c = core; val conn = ptpConn
+        if (a != null && c != null && conn != null) {
+            try { a.shutdown(c, conn) } catch (_: Exception) {}
+        }
+        try { c?.closeSession() } catch (_: Exception) {}
+        try { conn?.release() } catch (_: Exception) {}
+        core       = null
+        adapter    = null
+        ptpConn    = null
+        pollingJob = null
+        synchronized(this) { isConnecting = false }
+        Log.i(TAG, "Poll-loop teardown complete — USB session released")
     }
 
     /** @return true if an image was successfully delivered to onImageReceived. */
