@@ -426,6 +426,38 @@ coroutine, so that restore can hard-crash the app at startup.
 | Sequence numbers restart after CLEAR SESSION HISTORY, regenerating filenames already on the FTP server | Accepted for now |
 | `terminal` column + Room migration v10 for retry classification (FR-3 optional) | Schema risk before a field test; the retry bound already removes the storm |
 | `debugRetryLastUpload()` shipping in release builds | Intentional per WI-3 guard 6 |
+| **Recover shots taken while the cable was disconnected** — see design notes below | Feature, not a fix: schema + fragile subsystem + UI, with an unresolved prerequisite |
+
+## Deferred feature — disconnected-shot recovery
+
+Observed 2026-08-18 during FR-4/FR-5 testing: a frame shot while the cable was unseated is
+**silently lost**. On reconnect the poll loop seeds `knownHandles` with everything on the card
+(`seeded: 320` before the disconnect, `seeded: 321` after), so the new image counts as
+pre-existing and is never imported. Nothing in the UI indicates it happened. If cables get
+bumped in the field, an operator can finish a session short without knowing.
+
+**Cheap interim (not yet implemented, ~30 lines, no schema change):** remember the previous seed
+count in `MtpCameraManager` and, when the next connect seeds a larger number, log the delta and
+surface a warning in `TetheredPanel` — "N photos taken while disconnected were not imported."
+Recovers nothing, but converts a silent loss into a visible one, which is the dangerous part.
+
+**Full feature sketch:**
+1. Add `sourceFilename` to `SessionImage` (Room migration v10) — the camera's own name, e.g.
+   `IMG_1234.JPG`. `handleTetheredImage` already receives it and currently discards it.
+2. On reconnect, diff the card against what Room already holds and offer the difference in a
+   recovery dialog (Import / Dismiss).
+3. Import selected shots through the normal rename/save/upload pipeline.
+
+**Open question that must be settled first:** are PTP object handles stable across sessions on the
+Canon T7? The spec does not guarantee a camera reuses a handle for the same file after
+CloseSession/OpenSession. If Canon re-enumerates, handle diffing re-imports duplicates or misses
+files, and identity must come from `GetObjectInfo` filenames instead — cheap when handles are
+stable (one call per genuinely new shot), expensive when they are not (one call per card object,
+321 round trips in the observed state). Test this before committing to a design.
+
+**Second open question:** recovered shots belong to the session that was active when they were
+*taken*, which may no longer be the active session. Importing into whatever is active now would
+misfile them — the same class of bug FR-1 just fixed.
 
 ---
 
