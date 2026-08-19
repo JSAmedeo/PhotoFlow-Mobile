@@ -4,7 +4,21 @@
 **Base branch:** `hardening/reliability-security-pass` (commit `63af4af`) — note this branch is **not yet merged to `master`**
 **Working branch:** `phase2/field-readiness` — create this first, do all work on it
 **Opened:** 2026-08-18
-**Status:** planned — no work items started
+**Status:** Group A code complete and unit-tested; device verification outstanding. Groups B–D not started.
+
+## Build note
+
+Android Studio holds a lock on `app/build/.../R.jar` while it is open, which fails
+`:app:processDebugResources` from the command line with
+`java.io.IOException: Couldn't delete ... R.jar`. This is an environment lock, not a code error.
+Either close Android Studio before a CLI build, or verify in a throwaway worktree:
+
+```bash
+git worktree add --detach /tmp/verify-wt HEAD
+cp local.properties /tmp/verify-wt/
+cd /tmp/verify-wt && ./gradlew assembleDebug testDebugUnitTest
+git worktree remove --force /tmp/verify-wt
+```
 
 ```bash
 git checkout hardening/reliability-security-pass
@@ -76,9 +90,9 @@ debugging hours.
 
 | # | Work item | Group | Priority | Status |
 |---|---|---|---|---|
-| FR-1 | Selecting a session activates it | A | HIGH | not started |
-| FR-2 | Past-session banner | A | HIGH | not started |
-| FR-3 | Bounded auto-retry (default 3) | A | HIGH | not started |
+| FR-1 | Selecting a session activates it | A | HIGH | **code complete** (`5374393`) — device test pending |
+| FR-2 | Past-session banner | A | HIGH | **code complete** (`5374393`) — device test pending |
+| FR-3 | Bounded auto-retry (default 3) | A | HIGH | **code complete** (`342c8c5`) — device test pending |
 | FR-4 | Reject truncated PTP downloads | B | HIGH | not started |
 | FR-5 | Recover from poll-loop death | B | MEDIUM | not started |
 | FR-6 | Tethered file I/O off the USB thread | B | MEDIUM | not started |
