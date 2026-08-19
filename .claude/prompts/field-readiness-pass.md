@@ -436,7 +436,13 @@ Observed 2026-08-18 during FR-4/FR-5 testing: a frame shot while the cable was u
 pre-existing and is never imported. Nothing in the UI indicates it happened. If cables get
 bumped in the field, an operator can finish a session short without knowing.
 
-**Cheap interim — DONE (`286c991`).** `MtpCameraManager.lastKnownHandleCount` is refreshed on each
+**Cheap interim — DONE (`286c991`), device-verified 2026-08-18.** One shot taken while connected
+imported normally (`XYZ297729_25.jpg`), then three taken while unplugged were correctly reported:
+`missed-while-disconnected: 3 shot(s) … (was 322, now 325)`. Note the baseline was 322, not the
+seeded 321 — the per-poll refresh excluded the shot that had imported successfully. Had the
+baseline been the seed count, it would have reported 4. Banner text truncated on the Moto G's
+width and was fixed in `773d703`.
+ `MtpCameraManager.lastKnownHandleCount` is refreshed on each
 poll so it reflects where the previous session actually *ended*, not where it started, and the next
 connect compares its seed against it. A positive delta logs
 `missed-while-disconnected: N shot(s)…` and raises `missedWhileDisconnected`, which `MainScreen`
