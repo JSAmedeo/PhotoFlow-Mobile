@@ -4,7 +4,16 @@
 **Base branch:** `hardening/reliability-security-pass` (commit `63af4af`) — note this branch is **not yet merged to `master`**
 **Working branch:** `phase2/field-readiness` — create this first, do all work on it
 **Opened:** 2026-08-18
-**Status:** Group A code complete and unit-tested; device verification outstanding. Groups B–D not started.
+**Status:** Group A verified on device (Moto G 2025, 2026-08-18). Group B code complete and
+unit-tested, device verification outstanding. Groups C–D not started.
+
+## Group A device verification — 2026-08-18, Moto G 2025
+
+Build `PhotoFlow-debug-20260818-2048.apk` from `2b745c9`. App launched clean, no `FATAL`.
+The FR-3 settings migration was confirmed against real device data by decoding the DataStore
+protobuf: `auto_retry_max_count` had been rewritten from `-1` to `3`, and `settings_schema_v`
+was stamped `1` — the upgrade path exercised on an install that actually carried the old value.
+Operator confirmed the FR-1/FR-2 session-activation checks pass.
 
 ## Build note
 
@@ -93,9 +102,9 @@ debugging hours.
 | FR-1 | Selecting a session activates it | A | HIGH | **code complete** (`5374393`) — device test pending |
 | FR-2 | Past-session banner | A | HIGH | **code complete** (`5374393`) — device test pending |
 | FR-3 | Bounded auto-retry (default 3) | A | HIGH | **code complete** (`342c8c5`) — device test pending |
-| FR-4 | Reject truncated PTP downloads | B | HIGH | not started |
-| FR-5 | Recover from poll-loop death | B | MEDIUM | not started |
-| FR-6 | Tethered file I/O off the USB thread | B | MEDIUM | not started |
+| FR-4 | Reject truncated PTP downloads | B | HIGH | **code complete** (`00c7ae5`) — device test pending |
+| FR-5 | Recover from poll-loop death | B | MEDIUM | **code complete** (`00c7ae5`) — device test pending |
+| FR-6 | Tethered file I/O off the USB thread | B | MEDIUM | **code complete** (`dfd3383`) — device test pending |
 | FR-7 | Settings export never carries secrets | C | MEDIUM | not started |
 | FR-8 | Single source of truth for the API key | C | MEDIUM | not started |
 | FR-9 | Backup exclusions + crash-safe CredentialStore | C | MEDIUM | not started |
