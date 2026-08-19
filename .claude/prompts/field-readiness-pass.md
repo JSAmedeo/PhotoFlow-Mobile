@@ -436,10 +436,18 @@ Observed 2026-08-18 during FR-4/FR-5 testing: a frame shot while the cable was u
 pre-existing and is never imported. Nothing in the UI indicates it happened. If cables get
 bumped in the field, an operator can finish a session short without knowing.
 
-**Cheap interim (not yet implemented, ~30 lines, no schema change):** remember the previous seed
-count in `MtpCameraManager` and, when the next connect seeds a larger number, log the delta and
-surface a warning in `TetheredPanel` — "N photos taken while disconnected were not imported."
-Recovers nothing, but converts a silent loss into a visible one, which is the dangerous part.
+**Cheap interim — DONE (`286c991`).** `MtpCameraManager.lastKnownHandleCount` is refreshed on each
+poll so it reflects where the previous session actually *ended*, not where it started, and the next
+connect compares its seed against it. A positive delta logs
+`missed-while-disconnected: N shot(s)…` and raises `missedWhileDisconnected`, which `MainScreen`
+renders as a dismissible `MissedShotsBanner` at top level — not inside `TetheredPanel`, whose
+guidance overlay hides once images are showing, which is exactly when the warning matters.
+Recovers nothing; makes the loss visible.
+
+Its limits are deliberate and must not be treated as a foundation for the full feature: it is a
+count comparison, so deleting images on the camera between connections can mask a missed shot, a
+swapped card reports a bogus number, and the baseline is in memory so a disconnect spanning an app
+restart reports nothing.
 
 **Full feature sketch:**
 1. Add `sourceFilename` to `SessionImage` (Room migration v10) — the camera's own name, e.g.
