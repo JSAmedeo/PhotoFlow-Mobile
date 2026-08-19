@@ -105,9 +105,9 @@ debugging hours.
 | FR-4 | Reject truncated PTP downloads | B | HIGH | **code complete** (`00c7ae5`) — device test pending |
 | FR-5 | Recover from poll-loop death | B | MEDIUM | **code complete** (`00c7ae5`) — device test pending |
 | FR-6 | Tethered file I/O off the USB thread | B | MEDIUM | **code complete** (`dfd3383`) — device test pending |
-| FR-7 | Settings export never carries secrets | C | MEDIUM | not started |
-| FR-8 | Single source of truth for the API key | C | MEDIUM | not started |
-| FR-9 | Backup exclusions + crash-safe CredentialStore | C | MEDIUM | not started |
+| FR-7 | Settings export never carries secrets | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
+| FR-8 | Single source of truth for the API key | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
+| FR-9 | Backup exclusions + crash-safe CredentialStore | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
 | FR-10 | Cleanup: FTP ghost rows, photoOp export, doc drift | D | LOW | not started |
 
 Groups are ordered by risk: **A and B protect the field test**; C and D are hardening.
