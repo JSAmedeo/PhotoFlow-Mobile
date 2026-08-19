@@ -4,8 +4,9 @@
 **Base branch:** `hardening/reliability-security-pass` (commit `63af4af`) — note this branch is **not yet merged to `master`**
 **Working branch:** `phase2/field-readiness` — create this first, do all work on it
 **Opened:** 2026-08-18
-**Status:** Group A verified on device (Moto G 2025, 2026-08-18). Group B code complete and
-unit-tested, device verification outstanding. Groups C–D not started.
+**Status:** All ten work items code complete and unit-tested (71 tests green). Group A verified
+on device. Group B partly verified: FR-6 confirmed, FR-4/FR-5 failure paths never exercised.
+Groups C and D not yet exercised on device.
 
 ## Group A device verification — 2026-08-18, Moto G 2025
 
@@ -108,7 +109,7 @@ debugging hours.
 | FR-7 | Settings export never carries secrets | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
 | FR-8 | Single source of truth for the API key | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
 | FR-9 | Backup exclusions + crash-safe CredentialStore | C | MEDIUM | **code complete** (`97e3b0b`) — device test pending |
-| FR-10 | Cleanup: FTP ghost rows, photoOp export, doc drift | D | LOW | not started |
+| FR-10 | Cleanup: FTP ghost rows, photoOp export, doc drift | D | LOW | **code complete** (`d29b4a4`; photo_op in `97e3b0b`) |
 
 Groups are ordered by risk: **A and B protect the field test**; C and D are hardening.
 
