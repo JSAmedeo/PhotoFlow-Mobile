@@ -399,6 +399,16 @@ coroutine, so that restore can hard-crash the app at startup.
      ConfigScreen-only.
    - Document the new session-activation semantics (FR-1), the past-session banner (FR-2), and the
      retry default (FR-3).
+   - Add the FR-4/FR-5 tethering contract to the HARD RULES block, since a future agent could
+     plausibly undo either one while "cleaning up":
+     - `readDataAndResponse` must reject a short data phase rather than return a partial payload,
+       and `expectedPayloadBytes` must keep mapping the 0xFFFFFFFF unknown-length sentinel to 0 —
+       returning a real expectation there would reject every unknown-length transfer as truncated.
+     - `teardownAfterPollFailure()` must not be "simplified" into a `closeConnection()` call: it
+       runs on `pollingJob`, which `closeConnection()` cancels, so the teardown would cancel
+       itself partway through.
+     - The poll loop must keep rethrowing `CancellationException` ahead of the general `catch`,
+       or a normal disconnect will run the recovery path and overwrite the DISCONNECTED status.
 
 **Acceptance.**
 - [ ] A missing local file shows `FAILED` + a readable message and stops being re-enqueued.
