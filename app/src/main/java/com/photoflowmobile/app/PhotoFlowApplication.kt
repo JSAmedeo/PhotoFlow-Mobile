@@ -89,10 +89,17 @@ class PhotoFlowApplication : Application() {
         // any plaintext copy written afterwards was never cleaned up again — and an earlier
         // build rewrote one on every settings save. AppSettings no longer carries the key at
         // all, so nothing can recreate it, and this sweep removes what older builds left.
+        // Keyed on presence, not on the value being non-blank. An earlier build's migration
+        // *blanked* this entry rather than removing it, so on already-migrated installs the key
+        // is still there holding "". That leaks nothing, but it left the entry behind forever
+        // and contradicted the invariant this is supposed to establish: the DataStore does not
+        // carry the API key at all. Verified on the Moto G, where the entry survived until this.
         val prefs = settingsDataStore.data.first()
-        val apiKey = prefs[SettingsKeys.CLOUD_API_KEY] ?: ""
-        if (apiKey.isNotBlank()) {
-            if (credentialStore.getCloudApiKey().isBlank()) credentialStore.storeCloudApiKey(apiKey)
+        if (prefs.contains(SettingsKeys.CLOUD_API_KEY)) {
+            val apiKey = prefs[SettingsKeys.CLOUD_API_KEY] ?: ""
+            if (apiKey.isNotBlank() && credentialStore.getCloudApiKey().isBlank()) {
+                credentialStore.storeCloudApiKey(apiKey)
+            }
             settingsDataStore.edit { it.remove(SettingsKeys.CLOUD_API_KEY) }
         }
     }
