@@ -38,7 +38,27 @@ class PhotoFlowApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        appScope.launch { migrateSecretsToCredentialStore() }
+        appScope.launch {
+            migrateSecretsToCredentialStore()
+            migrateSettingsSchema()
+        }
+    }
+
+    // One-time settings rewrites, versioned so each runs exactly once.
+    //
+    // v1 — bound auto-retry. Builds before this defaulted autoRetryMaxCount to -1 (continuous),
+    // which re-uploaded terminally-failed images every few seconds indefinitely. Changing the
+    // Kotlin default only helps fresh installs, so installs still carrying -1 are moved to 3.
+    // Gating on the schema version means an operator who later chooses Continuous keeps it.
+    private suspend fun migrateSettingsSchema() {
+        val prefs = settingsDataStore.data.first()
+        if ((prefs[SettingsKeys.SETTINGS_SCHEMA_V] ?: 0) >= 1) return
+        settingsDataStore.edit { p ->
+            if (p[SettingsKeys.AUTO_RETRY_MAX_COUNT] == -1) {
+                p[SettingsKeys.AUTO_RETRY_MAX_COUNT] = 3
+            }
+            p[SettingsKeys.SETTINGS_SCHEMA_V] = 1
+        }
     }
 
     // One-time sweep: moves plaintext FTP passwords and cloud API key into CredentialStore,

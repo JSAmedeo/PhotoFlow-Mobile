@@ -401,7 +401,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         loggingEnabled = j.optBoolean("logging_enabled", true),
         autoRetryEnabled = j.optBoolean("auto_retry_enabled", true),
         autoRetryIntervalSeconds = j.optInt("auto_retry_interval_secs", 4),
-        autoRetryMaxCount = j.optInt("auto_retry_max_count", -1),
+        autoRetryMaxCount = j.optInt("auto_retry_max_count", 3),
         sessionHistoryMax = j.optInt("session_history_max", 50),
         saveBackupToPhone = j.optBoolean("save_backup_to_phone", false),
         autoDeleteBackups = j.optBoolean("auto_delete_backups", false),

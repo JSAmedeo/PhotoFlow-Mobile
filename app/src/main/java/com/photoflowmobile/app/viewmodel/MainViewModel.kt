@@ -434,12 +434,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startAutoRetryLoop() {
         viewModelScope.launch {
             val context = getApplication<Application>()
+            // Ids already reported as exhausted, so the loop logs that once per image instead of
+            // every interval. Entries are dropped when the image leaves the failed set (retried
+            // by hand, or finally uploaded).
+            val loggedExhausted = mutableSetOf<Long>()
             while (true) {
                 val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
                 if (settings.autoRetryEnabled) {
-                    repository.getFailedImages().first().forEach { image ->
+                    val failed = repository.getFailedImages().first()
+                    loggedExhausted.retainAll(failed.map { it.id }.toSet())
+                    failed.forEach { image ->
                         val withinLimit = settings.autoRetryMaxCount == -1 ||
                                 image.retryCount < settings.autoRetryMaxCount
+                        if (!withinLimit && loggedExhausted.add(image.id)) {
+                            pipelineLog("[UPLOAD] retry limit reached: ${image.filename} id=${image.id} " +
+                                    "after ${image.retryCount} attempt(s) — tap RETRY to try again")
+                        }
                         if (withinLimit) {
                             // Skip if WorkManager already has an active job for this image
                             val infos = withContext(Dispatchers.IO) {
@@ -456,8 +466,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             if (!alreadyQueued) {
                                 // Increment retry count only — keep FAILED state and error message visible
                                 repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
-                                enqueueUpload(image.id, image.filename, ExistingWorkPolicy.REPLACE)
-                                pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
+                                // KEEP, never REPLACE: REPLACE tears down the existing work request
+                                // and resets WorkManager's runAttemptCount to 0, so the executors'
+                                // `runAttemptCount >= 10` cap could never trip. The alreadyQueued
+                                // check above already prevents duplicates; KEEP is the backstop.
+                                enqueueUpload(image.id, image.filename, ExistingWorkPolicy.KEEP)
+                                pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} " +
+                                        "attempt=${image.retryCount + 1}/${settings.autoRetryMaxCount.takeIf { it != -1 } ?: "∞"}")
                             }
                         }
                     }

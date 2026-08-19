@@ -9,6 +9,9 @@ import com.photoflowmobile.app.data.model.*
 val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "photoflow_settings")
 
 object SettingsKeys {
+    // Bumped when a stored settings value needs a one-time rewrite that a changed Kotlin
+    // default cannot deliver on its own. See PhotoFlowApplication.migrateSettingsSchema.
+    val SETTINGS_SCHEMA_V         = intPreferencesKey("settings_schema_v")
     val DEVICE_MODE               = stringPreferencesKey("device_mode")
     val DARK_MODE                 = booleanPreferencesKey("dark_mode")
     val NAMING_FIELDS             = stringPreferencesKey("naming_fields")
@@ -45,7 +48,7 @@ fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     loggingEnabled         = prefs[SettingsKeys.LOGGING_ENABLED] ?: true,
     autoRetryEnabled       = prefs[SettingsKeys.AUTO_RETRY_ENABLED]       ?: true,
     autoRetryIntervalSeconds = prefs[SettingsKeys.AUTO_RETRY_INTERVAL_SECS] ?: 4,
-    autoRetryMaxCount      = prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     ?: -1,
+    autoRetryMaxCount      = prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     ?: 3,
     sessionHistoryMax      = prefs[SettingsKeys.SESSION_HISTORY_MAX]      ?: 50,
     saveBackupToPhone      = prefs[SettingsKeys.SAVE_BACKUP_TO_PHONE]     ?: false,
     autoDeleteBackups      = prefs[SettingsKeys.AUTO_DELETE_BACKUPS]      ?: false,

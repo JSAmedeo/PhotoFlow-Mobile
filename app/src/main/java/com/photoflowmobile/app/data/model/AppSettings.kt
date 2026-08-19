@@ -26,7 +26,10 @@ data class AppSettings(
     val loggingEnabled: Boolean = true,
     val autoRetryEnabled: Boolean = true,
     val autoRetryIntervalSeconds: Int = 4,
-    val autoRetryMaxCount: Int = -1,  // -1 = continuous
+    // Bounded by default. Continuous (-1) retries terminal failures — a wrong API key, a 422,
+    // an unregistered device — forever, re-uploading the full file every interval for the rest
+    // of a shoot. Operators can still opt into -1 in Settings.
+    val autoRetryMaxCount: Int = 3,
     val sessionHistoryMax: Int = 50,  // -1 = unlimited
     val saveBackupToPhone: Boolean = false,
     val autoDeleteBackups: Boolean = false,
