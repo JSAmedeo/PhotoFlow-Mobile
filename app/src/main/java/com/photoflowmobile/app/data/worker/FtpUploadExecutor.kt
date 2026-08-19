@@ -45,7 +45,18 @@ internal object FtpUploadExecutor {
         val image = imageDao.getById(imageId) ?: return@withContext ListenableWorker.Result.failure()
         val file = File(image.localPath)
 
-        if (!file.exists()) return@withContext ListenableWorker.Result.failure()
+        if (!file.exists()) {
+            // Mark the row, don't just bail. Returning without touching it left the image
+            // PENDING with no error message: re-enqueued at every app start, permanently in the
+            // transfer queue, and impossible for the operator to diagnose or clear. The cloud
+            // path already reported this; the FTP path did not.
+            imageDao.update(image.copy(
+                uploadState  = UploadState.FAILED,
+                errorMessage = "Local file not found — ${image.localPath}"
+            ))
+            log("[UPLOAD] TERMINAL (missing file): ${image.filename} (id=$imageId)")
+            return@withContext ListenableWorker.Result.failure()
+        }
 
         if (profile == null) {
             imageDao.update(image.copy(uploadState = UploadState.FAILED, errorMessage = "No active FTP connection configured"))
