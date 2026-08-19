@@ -241,7 +241,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val captureCode = buildCaptureCode(session, seq)
             pipelineLog("[IMAGE] renamed: $cameraFilename → $filename (session=${session.sessionKey} seq=$seq captureCode=$captureCode)")
             val file = File(outputDir, filename)
-            try { file.writeBytes(data) }
+            // This whole path runs on the single PhotoFlow-USB thread (the poll loop calls
+            // onImageReceived directly), so a 25 MB write here stalls image polling for its
+            // duration. Stay inside captureMutex — the filename depends on the sequence number —
+            // but push the blocking write onto the IO pool.
+            try { withContext(Dispatchers.IO) { file.writeBytes(data) } }
             catch (e: Exception) { Log.e(PIPELINE_TAG, "[IMAGE] save failed: $filename", e); return@withLock null }
             val id = try {
                 repository.saveImage(
@@ -304,9 +308,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun saveBackupIfEnabled(filename: String, sourceFile: File) {
+    // Copies a full-size image, so it must never run on the caller's thread: the tethered path
+    // calls it from the PhotoFlow-USB poll thread (stalling image import) and the native path
+    // from the main thread (janking the UI mid-shoot).
+    private suspend fun saveBackupIfEnabled(filename: String, sourceFile: File) = withContext(Dispatchers.IO) {
         val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
-        if (!settings.saveBackupToPhone) return
+        if (!settings.saveBackupToPhone) return@withContext
         val context = getApplication<Application>()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -668,13 +675,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val filename = buildFilename(settings, session.barcode, seq)
                                 val captureCode = buildCaptureCode(session, seq)
                                 val finalFile = File(outputDir, filename)
-                                // renameTo is atomic on the same filesystem; fallback to copy+delete
-                                if (!tempFile.renameTo(finalFile)) {
-                                    try { tempFile.copyTo(finalFile, overwrite = true); tempFile.delete() }
-                                    catch (e: Exception) {
-                                        Log.e(PIPELINE_TAG, "capture: rename failed $filename", e)
-                                        return@withLock null
-                                    }
+                                // renameTo is atomic on the same filesystem; fallback to copy+delete.
+                                // On IO because this callback runs on the main thread, and the
+                                // copy fallback would otherwise block the UI for a full-size file.
+                                val renamed = withContext(Dispatchers.IO) {
+                                    if (tempFile.renameTo(finalFile)) true
+                                    else runCatching {
+                                        tempFile.copyTo(finalFile, overwrite = true); tempFile.delete()
+                                    }.isSuccess
+                                }
+                                if (!renamed) {
+                                    Log.e(PIPELINE_TAG, "capture: rename failed $filename")
+                                    return@withLock null
                                 }
                                 val id = try {
                                     repository.saveImage(
