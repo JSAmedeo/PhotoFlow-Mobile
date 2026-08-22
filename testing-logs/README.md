@@ -105,6 +105,17 @@ Across the 148 images since, in 19 other sessions including a 58-image session a
 field test: **zero duplicates, zero gaps**. Worth re-running that check after any change to the
 capture path.
 
+**The FR-3 retry storm, in production data — both devices, pre-WI-1.** Seven images on each
+handset carry very high retry counts: 705–719 on the Moto (2026-05-02), 604–605 and 517–522 on
+the Samsung (2026-07-04). At the 4-second loop interval, 719 retries is about **48 minutes** of
+continuously re-uploading full-size files to an unreachable server. All of them eventually
+reached `UPLOADED`, so the unbounded loop did work — at that cost, and with no way to stop it.
+
+Since WI-1 (~2026-07-05) there are **zero retries across 73 images**, because WorkManager absorbs
+transient failures and the in-app loop skips anything already queued. `retryCount` now only moves
+once WorkManager has given up. See "What to test next" in `TESTING.md` — this is why upload
+failure recovery is the highest-value untested path.
+
 **FR-1 session switching, used for real — Samsung, 2026-08-20 native camera.** The clearest
 evidence in either capture that "add a photo to an earlier session" works end to end:
 

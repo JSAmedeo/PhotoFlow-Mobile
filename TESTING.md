@@ -35,6 +35,80 @@ testing; USB held throughout.
 
 ---
 
+## What to test next, and why
+
+Derived from the device snapshots of 2026-08-21/22 (192 images across both handsets, back to
+April). Recorded here because it contradicts some of what we had been testing by instinct.
+
+### 1. Upload failure and recovery — the largest untested risk
+
+**No image on either device has ever been recorded as `FAILED`.** All 192 are `UPLOADED`, and not
+one carries an `errorMessage`. So the failure UI — the orange File Transfers button, the per-row
+error text, the RETRY button — has never been seen under real conditions.
+
+That would be comforting if outages did not happen. They do, and the data proves it:
+
+| Device | Date | Images | retryCount |
+|---|---|---|---|
+| Moto G | 05-02 | 4 | 705–719 |
+| Samsung | 07-04 | 3 | 604–605 |
+| Samsung | 07-04 | 3 | 517–522 |
+
+At the 4-second loop interval, **719 retries is roughly 48 minutes** of continuously re-uploading
+full-size files to an unreachable server. Every one of them eventually succeeded — the old
+unbounded loop did get there, at that cost. This is the FR-3 retry storm, in production data.
+
+**Since WI-1 landed (~2026-07-05): zero retries on either device across 73 images.** WorkManager
+now absorbs transient failures with exponential backoff, and the in-app loop skips anything
+WorkManager already has queued, so `retryCount` only moves once WorkManager has given up — which
+has not happened yet.
+
+The consequence: **FR-3's bound of 3 has never been exercised**, and it is the one change in the
+pass that could make things *worse* than before. Arithmetic says it is safe — WorkManager's ten
+exponential attempts from a 10 s base span about 2.8 hours, comfortably covering a 48-minute
+outage, before the loop's 3 attempts even begin — but that is a prediction, not a result.
+
+**Test it deliberately.** Point the active FTP profile at an unreachable host (or stop the server)
+mid-session, shoot several frames, then restore it. What to confirm:
+
+- images reach `FAILED` with a readable error, and the File Transfers button turns orange
+- once the server returns, they upload without operator intervention
+- `retryCount` settles at or below 3, and nothing is stuck in `PENDING`
+- an image that has genuinely exhausted its attempts still recovers via the manual RETRY button
+
+### 2. Burst capture matters on the tethered path, not the native one
+
+The two devices work very differently, and it is not what we assumed:
+
+| | Samsung (native) | Moto G (tethered) |
+|---|---|---|
+| median gap between shots in a session | 13.8 s | **1.8 s** |
+| intervals under 3 s | 2 of 38 | **72 of 128** |
+| intervals under 1 s | 1 | **13** |
+| median images per session | 3 | 1 |
+
+Rapid capture is a **tethered** phenomenon — a photographer working a DSLR shutter — while native
+capture is paced by tapping a button and glancing at the review pane. So `captureMutex` stress
+testing belongs on the tethered path, where it was already aimed. Native mode does not need it.
+
+### 3. Sessions are small and numerous, and switching between them is normal
+
+Median session size is 1–3 images. Both devices show capture **returning to an earlier session**
+twice in ordinary use, without anyone setting out to test it. FR-1 is therefore exercised
+constantly rather than exceptionally, which is the best argument that its zero mismatches across
+192 images is meaningful.
+
+Test shape should follow: many small sessions with switching between them, rather than one long
+session with a burst in it.
+
+### 4. Session hygiene
+
+Both devices were found holding a **stale active session** (`TEST` with 0 images, `SAZ814795` with
+1). Harmless, but it means the next capture lands somewhere unintended. Covered by the checklist
+below.
+
+---
+
 ## Live test checklist
 
 Follow this for any field or bench session whose result is worth keeping. It exists because the
