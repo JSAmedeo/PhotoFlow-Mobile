@@ -38,6 +38,36 @@ removes them on a clean close. The remaining `photoflow.db` is self-contained an
 verify with `PRAGMA integrity_check` if in doubt. They must still be pulled, though — without the
 WAL, recent writes would be missing from the snapshot entirely.
 
+## Building a stakeholder handoff
+
+After capturing every device for a test date, bundle them:
+
+```bash
+python testing-logs/tools/make_handoff.py --date 2026-08-20 \
+    --notes "First real-workflow field test, Canon T7 tethered on the Moto, native on the Samsung"
+```
+
+That writes `testing-logs/handoff/<date>/`, self-contained and numbered in upload order:
+
+```
+00-START-HERE.md      what to do, what to upload, and the prompt to open with
+01-brief.md           this session's figures (computed) + stable background + guidance
+02-<label>.md         copy of each device's session report
+03-<label>.md
+```
+
+**Upload every file in that folder** to a browser chat and open with the line in START-HERE. The
+brief tells the assistant the audience, the register, and — importantly — what not to overstate.
+
+Figures come from `sessions/<stem>.json`, written by `capture_session.py`. If that is missing they
+are computed from the raw snapshot and the JSON is written then, so a bundle can always be rebuilt
+later even though raw snapshots are gitignored.
+
+`handoff/_background.md` is the stable narrative reused in every bundle: what the app is, what was
+fixed before field testing, what is not yet proven, what happens next. **Its last two sections go
+stale fastest** — revisit them after each session, because a brief claiming something is untested
+after it has been tested is worse than no brief.
+
 ## What the report checks
 
 Each check maps onto a specific fix, so a regression shows up as a number rather than a vibe:

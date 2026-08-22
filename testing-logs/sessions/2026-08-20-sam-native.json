@@ -1,0 +1,16 @@
+{
+  "date": "2026-08-20",
+  "label": "sam-native",
+  "images": 9,
+  "sessions_created": 4,
+  "uploaded": 9,
+  "failed": 0,
+  "pending": 0,
+  "max_retry": 0,
+  "misattributed": 0,
+  "dup_seq": 0,
+  "gap_seq": 0,
+  "rapid_captures": 1,
+  "alltime_images": 44,
+  "alltime_not_uploaded": 0
+}

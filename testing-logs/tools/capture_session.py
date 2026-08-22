@@ -19,6 +19,7 @@ Two hard-won details, do not "simplify" them:
     destroys a previous good snapshot when the device drops mid-command.
 """
 import argparse
+import json
 import os
 import shutil
 import sqlite3
@@ -30,6 +31,7 @@ DEFAULT_ADB = r"C:\Users\John\AppData\Local\Android\Sdk\platform-tools\adb.exe"
 PKG = "com.photoflowmobile.app"
 DB_FILES = ["photoflow.db", "photoflow.db-wal", "photoflow.db-shm"]
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
 
 
@@ -135,6 +137,17 @@ def main():
     report = build_report(db_path, date, args.label, info, log, args.notes, device_log)
     out = os.path.join(ROOT, "sessions", stem + ".md")
     open(out, "w", encoding="utf-8").write(report)
+
+    # Machine-readable figures alongside the report, so make_handoff.py can rebuild a bundle
+    # later without the raw snapshot — which is gitignored and may not survive.
+    try:
+        from make_handoff import summarise
+        json.dump(summarise(db_path, date, args.label),
+                  open(os.path.join(ROOT, "sessions", stem + ".json"), "w", encoding="utf-8"),
+                  indent=2)
+        print("  summary: sessions/%s.json" % stem)
+    except Exception as e:
+        print("  (summary json skipped: %s)" % e)
     print("\nreport: %s" % os.path.relpath(out, os.path.dirname(ROOT)))
     print("raw:    %s" % os.path.relpath(raw, os.path.dirname(ROOT)))
 
