@@ -1,7 +1,7 @@
 package com.photoflowmobile.app.data.worker
 
 import android.os.Build
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.work.ListenableWorker
 import com.photoflowmobile.app.BuildConfig

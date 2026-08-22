@@ -9,7 +9,7 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow

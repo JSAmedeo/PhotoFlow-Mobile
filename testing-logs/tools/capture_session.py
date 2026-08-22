@@ -108,6 +108,18 @@ def main():
             info.append(line.strip())
     open(os.path.join(raw, "device-info.txt"), "w", encoding="utf-8").write("\n".join(info) + "\n")
 
+    # On-device log files. This is the durable record — unlike logcat it survives a reboot,
+    # so for a test captured after the fact it is normally the only narration available.
+    logs_dir = os.path.join(raw, "device-logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    _, names = adb(["shell", "run-as %s ls files/logs/" % PKG], args.serial, args.adb)
+    pulled = 0
+    for name in [n.strip() for n in names.split("\n") if n.strip().endswith(".log")]:
+        n = pull_binary("files/logs/" + name, os.path.join(logs_dir, name), args.serial, args.adb)
+        if n:
+            pulled += 1
+    print("  device log files pulled: %d" % pulled)
+
     # Logcat, best effort. Usually empty for a past test: the buffer is RAM-only, does not
     # survive a reboot, and `logcat -G` sizing resets with it.
     _, log = adb(["logcat", "-d", "-s", "PhotoFlow/Pipeline:*", "PhotoFlow/Tether:*",
@@ -116,14 +128,18 @@ def main():
     open(os.path.join(raw, "logcat-photoflow.txt"), "w", encoding="utf-8").write(log)
     print("  logcat lines captured: %d" % len([l for l in log.split("\n") if "PhotoFlow/" in l]))
 
-    report = build_report(db_path, date, args.label, info, log, args.notes)
+    device_log = ""
+    for fn in sorted(os.listdir(logs_dir)):
+        if date in fn:
+            device_log = open(os.path.join(logs_dir, fn), encoding="utf-8", errors="replace").read()
+    report = build_report(db_path, date, args.label, info, log, args.notes, device_log)
     out = os.path.join(ROOT, "sessions", stem + ".md")
     open(out, "w", encoding="utf-8").write(report)
     print("\nreport: %s" % os.path.relpath(out, os.path.dirname(ROOT)))
     print("raw:    %s" % os.path.relpath(raw, os.path.dirname(ROOT)))
 
 
-def build_report(db_path, date, label, info, logcat, notes):
+def build_report(db_path, date, label, info, logcat, notes, device_log=""):
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
 
@@ -213,6 +229,19 @@ def build_report(db_path, date, label, info, logcat, notes):
     L.append("- **FTP ghost rows** - still PENDING: **%d**"
              % len([r for r in imgs if r["uploadState"] == "PENDING"]))
     L.append("")
+
+    dl = [l for l in device_log.split("\n") if l.strip()]
+    L.append("## On-device log (files/logs)\n")
+    if dl:
+        L.append("%d lines for this date. Excerpt:\n" % len(dl))
+        L.append("```")
+        L.extend(dl[:40])
+        if len(dl) > 40:
+            L.append("... %d more lines, full file in the raw snapshot" % (len(dl) - 40))
+        L.append("```\n")
+    else:
+        L.append("_No on-device log for this date._ Either the session predates the file logger,"
+                 " or logging was disabled in Settings.\n")
 
     logn = len([l for l in logcat.split("\n") if "PhotoFlow/" in l])
     L.append("## Logcat\n")

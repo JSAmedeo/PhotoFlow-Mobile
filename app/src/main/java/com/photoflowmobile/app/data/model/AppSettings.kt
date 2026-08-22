@@ -24,6 +24,9 @@ data class AppSettings(
     val namingSeparator: String = "_",
     val namingExtension: String = "JPG",
     val loggingEnabled: Boolean = true,
+    // DEBUG lines to the on-device log file. Off by default: the PTP poll loop logs at
+    // DEBUG every 500 ms, which is unusable in a file over a full session.
+    val verboseLogging: Boolean = false,
     val autoRetryEnabled: Boolean = true,
     val autoRetryIntervalSeconds: Int = 4,
     // Bounded by default. Continuous (-1) retries terminal failures — a wrong API key, a 422,

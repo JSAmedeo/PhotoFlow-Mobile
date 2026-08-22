@@ -48,7 +48,7 @@ import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import androidx.datastore.preferences.core.edit
 import com.photoflowmobile.app.BuildConfig
 import kotlinx.coroutines.Dispatchers

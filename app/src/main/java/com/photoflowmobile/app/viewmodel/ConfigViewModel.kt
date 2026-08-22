@@ -18,6 +18,7 @@ import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudDeviceService
 import com.photoflowmobile.app.data.cloud.CloudManifestService
 import com.photoflowmobile.app.data.cloud.RegistrationResult
+import com.photoflowmobile.app.data.logging.PhotoFlowLog
 import com.photoflowmobile.app.data.datastore.SettingsKeys
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
@@ -301,6 +302,67 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: Exception) {
                 _manifestResult.value = "Error: ${e.message}"
             }
+        }
+    }
+
+    /**
+     * Writes the on-device logs to a single text file in Downloads.
+     *
+     * Exists so an operator can retrieve a session's logs without a laptop or ADB. Logcat is
+     * RAM-only and does not survive a reboot, so after a field test it is routinely empty —
+     * this and the file log behind it are the only durable record.
+     */
+    fun exportLogs(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = PhotoFlowLog.logFiles()
+                if (files.isEmpty()) {
+                    _transferResult.value = SettingsTransferResult.Error(
+                        "No logs on device yet — check Enable logging is on"
+                    )
+                    return@launch
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                val fileName = "photoflow-logs-$stamp.txt"
+                // Oldest first so the export reads chronologically.
+                val body = buildString {
+                    files.sortedBy { it.name }.forEach { f ->
+                        append("===== ").append(f.name).append(" (")
+                            .append(f.length()).append(" bytes) =====\n")
+                        append(runCatching { f.readText() }.getOrElse { "<unreadable: ${it.message}>\n" })
+                        append('\n')
+                    }
+                }
+                writeToDownloads(context, fileName, body, "text/plain")
+                _transferResult.value = SettingsTransferResult.ExportSuccess("Downloads/$fileName")
+            } catch (e: Exception) {
+                _transferResult.value = SettingsTransferResult.Error("Log export failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Shared by the settings and log exports — MediaStore on Q+, direct path below. */
+    private fun writeToDownloads(context: Context, fileName: String, body: String, mime: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, mime)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("Could not create file in Downloads")
+            resolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out).use { it.write(body) }
+            }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            java.io.File(dir, fileName).writeText(body)
         }
     }
 

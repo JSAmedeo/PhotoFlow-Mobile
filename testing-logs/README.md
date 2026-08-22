@@ -104,3 +104,19 @@ received `seq=2` and wrote `MOBILEV1TEST001_02_abc.jpg` twice (image ids 24 and 
 Across the 148 images since, in 19 other sessions including a 58-image session and the 2026-08-20
 field test: **zero duplicates, zero gaps**. Worth re-running that check after any change to the
 capture path.
+
+**FR-1 session switching, used for real — Samsung, 2026-08-20 native camera.** The clearest
+evidence in either capture that "add a photo to an earlier session" works end to end:
+
+```
+12:20:54  SAZ121212_01.jpg   seq 1
+13:14:28  XYZ297729_31.jpg   seq 31   <- switched to a session opened 07-04
+13:15:00  XYZ297729_32.jpg   seq 32
+13:15:11  SAZ121212_02.jpg   seq 2    <- switched back, continued where it left off
+13:45:27  SAZ121212_03.jpg   seq 3
+```
+
+Two sessions interleaved, each continuing its own numbering — `XYZ297729` resumed at 31 from the
+30 images it already had in July, `SAZ121212` picked up at 2 after the detour. Zero filename or
+attribution mismatches. Before FR-1 this workflow did not exist: tapping a history row changed
+only what was displayed, while capture always went to the newest session.

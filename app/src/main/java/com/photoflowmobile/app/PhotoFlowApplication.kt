@@ -1,9 +1,9 @@
 package com.photoflowmobile.app
 
 import android.app.Application
-import android.util.Log
 import androidx.room.Room
 import com.photoflowmobile.app.data.datastore.SettingsKeys
+import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
 import com.photoflowmobile.app.data.db.AppDatabase
 import com.photoflowmobile.app.data.db.MIGRATION_1_2
@@ -14,12 +14,14 @@ import com.photoflowmobile.app.data.db.MIGRATION_5_6
 import com.photoflowmobile.app.data.db.MIGRATION_6_7
 import com.photoflowmobile.app.data.db.MIGRATION_7_8
 import com.photoflowmobile.app.data.db.MIGRATION_8_9
+import com.photoflowmobile.app.data.logging.PhotoFlowLog
 import com.photoflowmobile.app.data.security.CredentialStore
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class PhotoFlowApplication : Application() {
@@ -41,15 +43,44 @@ class PhotoFlowApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Durable on-device logging. Started before anything else so early startup lines are
+        // captured. Logcat is RAM-only and does not survive a reboot, so without this a field
+        // test leaves no record of *why* anything happened -- see PhotoFlowLog for the full note.
+        PhotoFlowLog.init(this, appScope)
+        installCrashHandler()
+        appScope.launch {
+            settingsDataStore.data
+                .map { appSettingsFromPreferences(it) }
+                .collect { s ->
+                    PhotoFlowLog.enabled = s.loggingEnabled
+                    PhotoFlowLog.verbose = s.verboseLogging
+                }
+        }
         appScope.launch {
             // Guarded: an uncaught throw here runs on a background coroutine during
             // Application.onCreate and takes the whole app down at launch. Credential access is
             // the realistic failure (a Keystore reset or a restored store it cannot decrypt),
             // and a device that cannot upload is far better than one that will not start.
             try { migrateSecretsToCredentialStore() }
-            catch (e: Exception) { Log.e(TAG, "Credential migration failed — continuing", e) }
+            catch (e: Exception) { PhotoFlowLog.e(TAG, "Credential migration failed — continuing", e) }
             try { migrateSettingsSchema() }
-            catch (e: Exception) { Log.e(TAG, "Settings migration failed — continuing", e) }
+            catch (e: Exception) { PhotoFlowLog.e(TAG, "Settings migration failed — continuing", e) }
+        }
+    }
+
+    /**
+     * Writes an uncaught exception to the log file before the process dies, then hands off to
+     * the platform handler so the crash still surfaces normally.
+     *
+     * Without this a field crash leaves nothing behind: the stack trace goes only to logcat,
+     * which is gone by the time anyone connects a cable.
+     */
+    private fun installCrashHandler() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            runCatching { PhotoFlowLog.logCrashSync(thread, e) }
+            previous?.uncaughtException(thread, e)
         }
     }
 

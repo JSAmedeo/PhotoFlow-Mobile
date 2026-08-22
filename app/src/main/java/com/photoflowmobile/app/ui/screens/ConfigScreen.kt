@@ -212,6 +212,7 @@ fun ConfigScreen(
             onLoadFtpPassword = viewModel::getFtpPassword,
             onClearSessionHistory = viewModel::clearSessionHistory,
             onExportSettings = { viewModel.exportSettings(context.applicationContext) },
+            onExportLogs = { viewModel.exportLogs(context.applicationContext) },
             onPickImportFile = { importLauncher.launch(arrayOf("application/json", "*/*")) },
             cloudRegistrationState = cloudRegistrationState,
             activeSessionKey = activeSessionKey,
@@ -248,6 +249,7 @@ fun ConfigScreen(
                 onLoadFtpPassword = viewModel::getFtpPassword,
                 onClearSessionHistory = viewModel::clearSessionHistory,
                 onExportSettings = { viewModel.exportSettings(context.applicationContext) },
+                onExportLogs = { viewModel.exportLogs(context.applicationContext) },
                 onPickImportFile = { importLauncher.launch(arrayOf("application/json", "*/*")) },
                 cloudRegistrationState = cloudRegistrationState,
                 activeSessionKey = activeSessionKey,
@@ -279,6 +281,7 @@ private fun PortraitConfigLayout(
     onLoadFtpPassword: (Long) -> String,
     onClearSessionHistory: () -> Unit,
     onExportSettings: () -> Unit,
+    onExportLogs: () -> Unit,
     onPickImportFile: () -> Unit,
     cloudRegistrationState: String,
     activeSessionKey: String?,
@@ -335,6 +338,7 @@ private fun PortraitConfigLayout(
                         onChange = onSettingsChange,
                         onClearSessionHistory = onClearSessionHistory,
                         onExportSettings = onExportSettings,
+                        onExportLogs = onExportLogs,
                         onPickImportFile = onPickImportFile,
                         cloudRegistrationState = cloudRegistrationState,
                         activeSessionKey = activeSessionKey,
@@ -929,6 +933,7 @@ private fun ConfigContent(
     onLoadFtpPassword: (Long) -> String,
     onClearSessionHistory: () -> Unit,
     onExportSettings: () -> Unit,
+    onExportLogs: () -> Unit,
     onPickImportFile: () -> Unit,
     cloudRegistrationState: String,
     activeSessionKey: String?,
@@ -981,6 +986,7 @@ private fun ConfigContent(
                     onChange = onSettingsChange,
                     onClearSessionHistory = onClearSessionHistory,
                     onExportSettings = onExportSettings,
+                    onExportLogs = onExportLogs,
                     onPickImportFile = onPickImportFile,
                     cloudRegistrationState = cloudRegistrationState,
                     activeSessionKey = activeSessionKey,
@@ -1553,6 +1559,7 @@ private fun GeneralSection(
     onChange: (AppSettings) -> Unit,
     onClearSessionHistory: () -> Unit,
     onExportSettings: () -> Unit,
+    onExportLogs: () -> Unit,
     onPickImportFile: () -> Unit,
     cloudRegistrationState: String,
     activeSessionKey: String?,
@@ -1778,7 +1785,43 @@ private fun GeneralSection(
             ConfigToggleRow("Enable logging", settings.loggingEnabled) {
                 onChange(settings.copy(loggingEnabled = !settings.loggingEnabled))
             }
-            InfoRow("Log Location", "PhotoFlow/Pipeline")
+            if (settings.loggingEnabled) {
+                ConfigToggleRow("Verbose (DEBUG detail)", settings.verboseLogging) {
+                    onChange(settings.copy(verboseLogging = !settings.verboseLogging))
+                }
+                Text(
+                    "Verbose records every PTP poll — useful for diagnosing a tethering fault, " +
+                            "far larger over a full session. Leave off for normal field use.",
+                    color = LocalAppColors.current.textDisabled,
+                    fontSize = 8.sp,
+                    lineHeight = 11.sp
+                )
+            }
+            InfoRow("Log Location", "On device: files/logs · logcat: PhotoFlow/*")
+            // The whole point of the on-device log is retrieval without a laptop or ADB, so the
+            // export has to live here next to the toggle that produces it.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, LocalAppColors.current.border)
+                    .clickable { onExportLogs() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        "EXPORT LOGS",
+                        color = LocalAppColors.current.blue,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        "Writes the on-device logs to a text file in Downloads",
+                        color = LocalAppColors.current.textDisabled,
+                        fontSize = 8.sp
+                    )
+                }
+            }
         }
 
         // ── Import / Export (existing style) ──────────────────────────────────

@@ -29,6 +29,55 @@ adb logcat -c
 adb logcat -t 500 --pid=$(adb shell pidof com.photoflowmobile.app)
 ```
 
+Prefer the **USB serial** (`ZY32L9TX7B`, `RFCW101K9PA`) over the wireless one for anything that
+must not be interrupted. Wireless ADB dropped roughly every ten minutes during 2026-08-18/21
+testing; USB held throughout.
+
+---
+
+## Live test checklist
+
+Follow this for any field or bench session whose result is worth keeping. It exists because the
+2026-08-20 field test produced a good outcome that was **only half recoverable**: the database had
+the results, but every log line was gone by the time a cable was connected.
+
+### Before
+
+- [ ] **Start a fresh session.** Do not shoot into whatever session is left active from last time —
+      both devices were found holding a stale one (`TEST`, `SAZ814795`).
+- [ ] **Settings → General → LOGS → Enable logging** is on. For a tethering fault add
+      **Verbose (DEBUG detail)**; leave it off otherwise, it records every 500 ms PTP poll.
+- [ ] Confirm the intended **Device Mode** (Tethered DSLR / Native Camera) and **Active Connection**.
+- [ ] Note the conditions you will want later: venue, network, camera, what you are trying to prove.
+
+### During
+
+- [ ] If a laptop is attached, raise the logcat buffer and stream to a file — logcat is RAM-only
+      and 256 KiB by default, which the PTP poll loop churns through in minutes:
+      ```bash
+      adb -s <serial> logcat -G 16M
+      adb -s <serial> logcat -s "PhotoFlow/Pipeline:*" "PhotoFlow/Tether:*" "PhotoFlow/PTP:*" > live.txt
+      ```
+- [ ] Note anything unexpected as it happens, with the wall-clock time — it makes the log
+      searchable afterwards.
+
+### After
+
+- [ ] **Do not reboot the device before capturing.** A reboot clears logcat *and* resets the
+      `logcat -G` sizing. This is exactly how the 2026-08-20 logs were lost.
+- [ ] Connect over USB and capture:
+      ```bash
+      python testing-logs/tools/capture_session.py \
+          --serial <usb-serial> --label <motog-tethered|sam-native|...> \
+          --date YYYY-MM-DD --notes "conditions"
+      ```
+- [ ] Read the generated report's **Integrity checks** — session attribution, duplicate/gapped
+      sequence numbers, retry counts and lingering `PENDING` rows should all be 0.
+- [ ] Commit the report under `testing-logs/sessions/`. Raw snapshots stay gitignored.
+
+If ADB is unavailable, the operator can still retrieve logs on the handset:
+**Settings → General → LOGS → EXPORT LOGS**, which writes them to Downloads.
+
 ---
 
 ## Tethering reliability test

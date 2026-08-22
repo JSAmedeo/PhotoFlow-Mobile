@@ -2,7 +2,7 @@ package com.photoflowmobile.app.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import java.io.File
