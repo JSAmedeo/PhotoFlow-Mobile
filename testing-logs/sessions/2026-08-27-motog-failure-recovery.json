@@ -1,0 +1,16 @@
+{
+  "date": "2026-08-27",
+  "label": "motog-failure-recovery",
+  "images": 1,
+  "sessions_created": 0,
+  "uploaded": 1,
+  "failed": 0,
+  "pending": 0,
+  "max_retry": 0,
+  "misattributed": 0,
+  "dup_seq": 0,
+  "gap_seq": 0,
+  "rapid_captures": 0,
+  "alltime_images": 149,
+  "alltime_not_uploaded": 0
+}

@@ -40,7 +40,26 @@ testing; USB held throughout.
 Derived from the device snapshots of 2026-08-21/22 (192 images across both handsets, back to
 April). Recorded here because it contradicts some of what we had been testing by instinct.
 
-### 1. Upload failure and recovery — the largest untested risk
+### 1. Upload failure and recovery — mostly answered on 2026-08-27
+
+> **Update.** A transient failure and full recovery was observed on the Motorola and is recorded in
+> `testing-logs/sessions/2026-08-27-motog-failure-recovery.md`. A photo was taken at a desk while
+> the active profile still pointed at the venue's server on another subnet. Findings:
+>
+> - Retry gaps of **80 s then 160 s** — WorkManager's exponential backoff from its 10 s base is
+>   what actually drives retries, as WI-1 intended.
+> - **`retryCount` stayed 0** through three failures. The in-app loop skips anything WorkManager
+>   still has queued, so a transient failure consumes **none** of FR-3's 3-attempt budget. This
+>   was the predicted interaction that justified a bound of 3, and it had never been observed.
+> - `attempt=1` after the manual RETRY confirms `forceRetry` uses `REPLACE` while the auto-loop
+>   uses `KEEP` — the operator gets an immediate attempt rather than waiting out a 320 s delay.
+> - **WI-2 validated incidentally**: the job was enqueued under one profile and executed under
+>   another after the operator switched, using the new one. Execution-time resolution works.
+>
+> **Still open:** the terminal case — an image exhausting all 3 attempts and stopping. That needs
+> a failure that never resolves. The section below stands for that case only.
+
+### 1a. The terminal-failure case — still untested
 
 **No image on either device has ever been recorded as `FAILED`.** All 192 are `UPLOADED`, and not
 one carries an `errorMessage`. So the failure UI — the orange File Transfers button, the per-row

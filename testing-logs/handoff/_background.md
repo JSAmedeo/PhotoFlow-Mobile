@@ -52,22 +52,35 @@ indication, a corrupt file that looked entirely normal. Now rejected and re-fetc
   and nothing said so. The app now warns that those shots are still on the camera card.
 - Smaller reliability fixes to tethering recovery and transfer-queue accuracy.
 
+## Upload failure and recovery — confirmed 2026-08-27
+
+Worth including, because it is the first time this was observed rather than assumed.
+
+A photo was taken at a desk while the app was still pointed at the venue's on-site server, which
+was unreachable from that network. The app retried on a widening schedule — 80 seconds, then 160
+— and displayed an error naming both addresses, which made the cause obvious at a glance rather
+than looking like a server fault. The operator switched to a reachable server and pressed retry;
+the photo uploaded in under a third of a second.
+
+That single episode confirmed several things that had until then only been designed for: retries
+widen rather than hammering the server, a temporary failure does not consume the operator's retry
+budget, switching servers mid-transfer works and the pending photo follows to the new one, and the
+manual retry button recovers immediately rather than waiting out a backoff.
+
 ## What is not yet proven
 
 State this plainly in any report:
 
-- **Upload failure handling has never been exercised.** No photo on either device has ever been
-  recorded as failed. So the error display and recovery flow, while implemented, have not been
-  seen under real conditions. A deliberate test against an unreachable server is planned.
+- **A permanently failing upload has not been observed.** The recovery path above worked, but the
+  case where a photo exhausts its retries and stops — so the operator must intervene — has not
+  happened yet. It needs a failure that never resolves.
 - **Two tethering recovery paths have never executed.** They run only when something goes wrong,
   and nothing has yet gone wrong in the specific way that triggers them.
 - Testing so far is one operator, two devices, one camera model.
 
 ## What happens next
 
-1. **On-device logging** — built, being installed on the handsets. Today, if something goes wrong
-   in the field the diagnostic record is lost within minutes; this makes each session
-   self-documenting.
-2. **Deliberate failure testing** — running against an unreachable server to confirm photos
-   recover cleanly and the operator sees an accurate queue.
-3. Further sessions across more varied conditions.
+1. **On-device logging** — installed on the Motorola on 2026-08-27, and already responsible for
+   the failure-and-recovery record above; previously that evidence would have been lost within
+   minutes. Still to be installed on the Samsung.
+2. Further sessions across more varied conditions.

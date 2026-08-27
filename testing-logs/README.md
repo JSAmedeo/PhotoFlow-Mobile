@@ -135,6 +135,23 @@ Across the 148 images since, in 19 other sessions including a 58-image session a
 field test: **zero duplicates, zero gaps**. Worth re-running that check after any change to the
 capture path.
 
+**First observed upload failure and recovery — Motorola, 2026-08-27.** After 192 photos of field
+use at a 100% upload rate, the first failure was finally seen — and the on-device log, installed
+that same day, captured the whole cycle. It would previously have been lost within minutes.
+
+```
+13:42:07  attempt=4  RETRYABLE (timeout)   profile "SAZ Test" 192.168.9.37, wrong subnet
+13:43:32  attempt=5  RETRYABLE (timeout)   <- 80s later
+13:46:17  attempt=6  RETRYABLE (timeout)   <- 160s later
+13:46:30  [CONFIG] connection loaded: "pgi-test" 192.168.1.147
+13:46:36  attempt=1  <- manual RETRY resets the schedule
+13:46:37  succeeded  (295ms)
+```
+
+The 80/160 doubling is WorkManager's exponential backoff, and `retryCount` stayed **0** throughout
+— a transient failure consumes none of FR-3's 3-attempt budget, which is exactly why a bound of 3
+is safe. Full analysis in `sessions/2026-08-27-motog-failure-recovery.md`.
+
 **The FR-3 retry storm, in production data — both devices, pre-WI-1.** Seven images on each
 handset carry very high retry counts: 705–719 on the Moto (2026-05-02), 604–605 and 517–522 on
 the Samsung (2026-07-04). At the 4-second loop interval, 719 retries is about **48 minutes** of
