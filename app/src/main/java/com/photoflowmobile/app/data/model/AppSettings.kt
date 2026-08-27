@@ -24,9 +24,15 @@ data class AppSettings(
     val namingSeparator: String = "_",
     val namingExtension: String = "JPG",
     val loggingEnabled: Boolean = true,
+    // DEBUG lines to the on-device log file. Off by default: the PTP poll loop logs at
+    // DEBUG every 500 ms, which is unusable in a file over a full session.
+    val verboseLogging: Boolean = false,
     val autoRetryEnabled: Boolean = true,
     val autoRetryIntervalSeconds: Int = 4,
-    val autoRetryMaxCount: Int = -1,  // -1 = continuous
+    // Bounded by default. Continuous (-1) retries terminal failures — a wrong API key, a 422,
+    // an unregistered device — forever, re-uploading the full file every interval for the rest
+    // of a shoot. Operators can still opt into -1 in Settings.
+    val autoRetryMaxCount: Int = 3,
     val sessionHistoryMax: Int = 50,  // -1 = unlimited
     val saveBackupToPhone: Boolean = false,
     val autoDeleteBackups: Boolean = false,
@@ -40,7 +46,9 @@ data class AppSettings(
     val cloudDeviceDisplayName: String = "",
     val cloudDeviceUuid: String = "",
     val cloudDeviceId: Int = 0,         // 0 = not yet registered
-    val cloudApiKey: String = "",       // staging API key; sent as X-PhotoFlow-Api-Key header
+    // NOTE: the Cloud API key is deliberately NOT a field here. AppSettings is persisted verbatim
+    // to DataStore in plaintext, so carrying the key would recreate the plaintext copy on every
+    // save. It lives only in CredentialStore (Keystore-backed); read it from there.
     val cloudStationName: String = ""   // optional station label sent with registration and uploads
 )
 

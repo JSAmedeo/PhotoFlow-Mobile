@@ -19,6 +19,14 @@ interface SessionDao {
     @Query("SELECT * FROM sessions WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Session?
 
+    /**
+     * Authoritative one-shot read of the active session. Prefer this over sampling a
+     * `WhileSubscribed` StateFlow on background paths (e.g. tethered image arrival), where
+     * no UI may be subscribed and `.value` can be stale or still at its initial value.
+     */
+    @Query("SELECT * FROM sessions WHERE status = 'active' ORDER BY startTime DESC LIMIT 1")
+    suspend fun getActiveSession(): Session?
+
     @Query(
         "SELECT s.*, " +
         "COUNT(si.id) as imageCount, " +
@@ -35,6 +43,20 @@ interface SessionDao {
 
     @Update
     suspend fun update(session: Session)
+
+    // ── Session activation ────────────────────────────────────────────────────
+    // Only ever called from SessionRepository.activateSession / createAndActivateSession,
+    // which wrap them in a transaction so no observer sees two active sessions (or none)
+    // mid-switch.
+
+    @Query("UPDATE sessions SET status = 'complete', endTime = :now WHERE status = 'active'")
+    suspend fun closeAllActiveSessions(now: Long)
+
+    @Query("UPDATE sessions SET status = 'complete', endTime = :now WHERE status = 'active' AND id != :sessionId")
+    suspend fun closeActiveSessionsExcept(sessionId: Long, now: Long)
+
+    @Query("UPDATE sessions SET status = 'active', endTime = NULL WHERE id = :sessionId")
+    suspend fun markActive(sessionId: Long)
 
     @Query("DELETE FROM session_images WHERE sessionId IN (SELECT id FROM sessions WHERE status != 'active')")
     suspend fun deleteImagesForCompletedSessions()

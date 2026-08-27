@@ -18,8 +18,8 @@ android {
         applicationId = "com.photoflowmobile.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
     }
@@ -110,6 +110,9 @@ dependencies {
     // ── Apache Commons Net (FTP) ─────────────────────────────
     // Pure-Java library; no extra native config needed
     implementation(libs.commons.net)
+
+    // ── Security (EncryptedSharedPreferences for credential storage) ─────────
+    implementation(libs.androidx.security.crypto)
 
     // ── DataStore Preferences ────────────────────────────────
     implementation(libs.datastore.preferences)

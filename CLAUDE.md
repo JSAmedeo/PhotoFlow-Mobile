@@ -87,7 +87,7 @@ The UI should feel like a professional field operations console, not a consumer 
 ### MainScreen
 - Primary operational dashboard (4-panel layout described above)
 - Top bar: app name + session barcode (centered, prominent) + WiFi SSID chip + File Transfers button + hamburger menu
-- File Transfers button: green when all clean, orange when any FAILED/RETRY_REQUIRED. Opens a
+- File Transfers button: green when all clean, orange when any FAILED. Opens a
   `Dialog` with the full non-UPLOADED image list. Each row shows filename, dynamic error message,
   state badge (PENDING / ↑ UP / ✓ / FAILED / AUTO-RETRY), and a RETRY button for failed items.
 - Left panel: thumbnail rail driven by Room session images; shot count live from DB; thumbnails
@@ -101,13 +101,24 @@ The UI should feel like a professional field operations console, not a consumer 
   session for review; transfer queue moved to File Transfers dialog)
 - Bottom bar: Active Connection dropdown (ConnectionProfile list from Room), CAPTURE button
   (Native Camera only), mode chip (Tethered Mode / Native Mode)
+- Two full-width banners sit directly under the top bar, in both orientations:
+  - `PastSessionBanner` (amber `warning`) whenever `pastSessionActive` — the active session is
+    not the most recently started one, so capture has moved to an earlier session. Carries a
+    GO TO NEWEST action.
+  - `MissedShotsBanner` (red `error`, dismissible) whenever `missedWhileDisconnected > 0` —
+    shots appeared on the camera card while the cable was unplugged and were seeded as
+    pre-existing, so they will never import. Warning only; it does not recover them.
+  Both live at MainScreen top level rather than inside `TetheredPanel`, whose guidance overlay
+  hides once images are showing — exactly when these matter. Their explanatory text wraps to
+  two lines rather than truncating; the truncated half was the load-bearing one on a narrow
+  screen ("still on the camera card", and the session code).
 - `BackHandler { activity.moveTaskToBack(true) }` — back press backgrounds the app instead of
   destroying the Activity, preserving the USB camera session
 - Camera capture: ImageCapture use case held in MainViewModel; fires CameraX takePicture()
   to a temp file (`tmp_<timestamp>.jpg`), then under `captureMutex` reads the DB count,
   assigns sequence number, renames the temp file to the final filename, and inserts
-  SessionImage (PENDING) into Room. Enqueues CloudUploadWorker or FtpUploadWorker depending
-  on active connection type. Logs `capture: firing`, `capture: saved`, or
+  SessionImage (PENDING) into Room. Enqueues `UploadWorker` (single unified worker; resolves
+  FTP vs Cloud API at execution time). Logs `capture: firing`, `capture: saved`, or
   `capture: FAILED code=N` to `PhotoFlow/Pipeline` tag.
 - **Sequence number race fix:** `captureMutex` (a `kotlinx.coroutines.sync.Mutex` in
   `MainViewModel`) serialises the count-read → filename-build → file-rename → DB-insert
@@ -169,15 +180,32 @@ The UI should feel like a professional field operations console, not a consumer 
 ## Navigation
 - Jetpack Navigation Compose
 - Three top-level destinations: ScanCardScreen, MainScreen, ConfigScreen
-- ScanCardScreen is the entry point (startDestination)
+- MainScreen is the `startDestination`. ScanCardScreen is reached from the no-session
+  prompt or the + NEW SESSION button — it is not the start destination, despite being the
+  conceptual entry point
 - After session creation: navigate to MainScreen, clearing back stack
 - MainScreen hamburger → ConfigScreen
 - MainScreen + NEW SESSION → ScanCardScreen
 
-## Session selection
-- `MainViewModel` tracks `selectedSessionId` (which session's images are shown in thumbnails/review)
-- Defaults to the active session; can be overridden by clicking a row in Session History
-- When a new session starts, the override clears and the view auto-follows the new session
+## Session selection — selection IS activation
+
+- There is no separate "viewing" session. `selectedSessionId` is derived from `activeSession`,
+  so thumbnails, review pane, shot count, and **both capture paths** always agree.
+- Tapping a row in Session History calls `MainViewModel.selectSession()`, which **activates**
+  that session via `SessionRepository.activateSession()` — a single transaction that closes
+  every other active session and reopens the target. The operator can therefore add a shot to
+  an earlier session deliberately.
+- Re-scanning a barcode that already has a session re-activates it through the same
+  transaction, so its sequence numbers and capture codes continue rather than restarting.
+- `pastSessionActive` is true whenever the active session is not the most recently started one;
+  MainScreen shows a persistent `PastSessionBanner` while it is, with a GO TO NEWEST action.
+
+**Why:** an earlier model had `_overrideSessionId` decouple "viewing" from "active".
+`handleTetheredImage` read the *selected* session while native capture read the *active* one, so
+reviewing an earlier customer mid-shoot silently filed subsequent tethered shots into that old
+session — old barcode in the filename, old capture code, uploaded to the old cloud session —
+while the bottom bar labelled the reviewed session "Active Session". Do not reintroduce an
+override; if a "look without switching" mode is ever wanted, it must not feed either capture path.
 
 ## File naming
 - Configured in ConfigScreen → File Naming section
@@ -189,10 +217,24 @@ The UI should feel like a professional field operations console, not a consumer 
 ## Key libraries
 - CameraX 1.3.4 — camera preview (`PreviewView`) and capture (`ImageCapture`)
 - ML Kit 17.3.0 — barcode scanning (wired, not yet active in UI)
-- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 8
-- WorkManager 2.9.0 — `FtpUploadWorker` and `CloudUploadWorker`; return `Result.success()` on
-  successful upload, `Result.failure()` on error (no WorkManager retry — ViewModel
-  `startAutoRetryLoop()` handles background retry on configurable interval)
+- Room 2.6.1 — Session, SessionImage, ConnectionProfile tables; current schema version 9
+- WorkManager 2.9.0 — single `UploadWorker` (replaces old `FtpUploadWorker`/`CloudUploadWorker`);
+  resolves FTP vs Cloud API at execution time from the active `ConnectionProfile`; uses
+  `EXPONENTIAL` back-off + `NetworkType.CONNECTED` constraint; `uploadMutex` in companion
+  prevents concurrent uploads; `runAttemptCount >= 10` caps WorkManager retries and falls
+  back to `Result.failure()`; ViewModel `startAutoRetryLoop()` drives FAILED→re-enqueue on
+  configurable interval. `FtpUploadExecutor` and `CloudUploadExecutor` are internal objects
+  called by `UploadWorker`, not registered as workers.
+- `CredentialStore` (`data/security/CredentialStore.kt`) — **the single authoritative store
+  for every secret**: FTP passwords and the Cloud API key are never written to Room or
+  DataStore. Opens defensively: an unreadable store (restored ciphertext with no Keystore key,
+  or a Keystore reset) is discarded and recreated once, falling back to an in-memory map if
+  even that fails — it must not throw, because it is reached from `Application.onCreate` and an
+  uncaught failure there took the whole app down at launch. Wraps `EncryptedSharedPreferences`
+  (AES256-SIV keys, AES256-GCM values) for FTP passwords keyed by profile ID and the Cloud
+  API key. `ConnectionProfile.password` is stored blank in Room; passwords live only in
+  `CredentialStore`. Migration from DataStore/Room plaintext runs once in
+  `PhotoFlowApplication.onCreate()` via `migrateSecretsToCredentialStore()`.
 - Apache Commons Net 3.10.0 — FTP transfers; `connectTimeout = 5 s`, `dataTimeout = 15 s`;
   dynamic error messages include phone IP and server IP/port
 - DataStore Preferences 1.1.1 — AppSettings persistence
@@ -284,7 +326,7 @@ style.
 
 ### Preventing duplicate USB claims
 A single `MtpCameraManager` instance must exist, and only one coroutine may claim the
-USB interface. Four layers of protection, in the order they were needed:
+USB interface. Five layers of protection, in the order they were needed:
 
 1. **Single MainViewModel instance.** `NavGraph.kt` scopes `MainViewModel` to the
    Activity via `viewModel(activity)` with
@@ -294,12 +336,20 @@ USB interface. Four layers of protection, in the order they were needed:
    `MainViewModel` instances, two `MtpCameraManager`s, and two coroutines racing to
    `claimInterface(force = true)` on the same USB interface. Never revert to the default
    here, and apply the same pattern to any future Activity-scoped VM.
-2. **`synchronized(this)` flag** in `connectOrRequestPermission` — atomic check-and-set
+2. **`android:launchMode="singleTop"` on `MainActivity`.** Without this, every
+   `USB_DEVICE_ATTACHED` broadcast delivered while the app is running creates a *new*
+   `MainActivity` instance — a new `ViewModelStore`, a new `MainViewModel`, and a new
+   `MtpCameraManager`. Observed in production: three `[APP] launched` log entries within
+   15 s in the same PID, three racing PTP connections, three zombie poll loops, all
+   commands returning `sent=-1`. `singleTop` routes the intent to `onNewIntent()` on the
+   existing instance instead. `MainActivity.onNewIntent()` already handles the attach
+   event correctly. Do not change the launchMode.
+3. **`synchronized(this)` flag** in `connectOrRequestPermission` — atomic check-and-set
    of `isConnecting` so multiple attach-path callers collapse to one launch.
-3. **`connectionMutex.withLock`** wraps all of `openConnection`. If a second coroutine
+4. **`connectionMutex.withLock`** wraps all of `openConnection`. If a second coroutine
    does slip past the flag, it waits here, and the early `if (core != null) return`
    guard stops it from claiming a second time.
-4. **Single-threaded USB dispatcher.** `usbDispatcher` is backed by a dedicated
+5. **Single-threaded USB dispatcher.** `usbDispatcher` is backed by a dedicated
    `Executors.newSingleThreadExecutor { Thread("PhotoFlow-USB") }`. Every USB I/O
    operation (open, init, poll, download, close) runs on that one thread. Samsung's USB
    stack appears to break if `bulkTransfer` calls on the same `UsbDeviceConnection` cross
@@ -363,6 +413,29 @@ Six fixes are in place:
 
 **HARD RULES for the USB permission subsystem — do not violate without re-testing on both devices:**
 
+- **Do not change `android:launchMode` away from `singleTop` on `MainActivity`.** This is the
+  root fix for the multi-MtpCameraManager zombie problem. With `standard` launchMode, plugging
+  the camera in while the app is running creates a new Activity instance, a new ViewModel, and
+  a new MtpCameraManager that races the existing one for the USB interface. The result is zombie
+  poll loops that spam `sent=-1` indefinitely and require an app restart. `singleTop` routes
+  `USB_DEVICE_ATTACHED` to `onNewIntent()` on the existing Activity instead.
+
+- **Do not remove `permissionDenied = true` from the exhausted-retry path in `openConnection`.**
+  After all retry attempts fail (e.g. camera in bad state from a prior competing connection),
+  this flag prevents the 5-second foreground rescan from immediately queueing another attempt.
+  Without it, each failure triggers a new rescan → new `openConnection` (holds `connectionMutex`
+  for up to ~9 s across 3 retries) → another failure → another rescan, compounding zombie
+  sessions that poison the USB endpoint. Recovery: physical cable re-plug (`onDeviceDetached`
+  resets `permissionDenied`) or mode switch (`resetAndRescan` resets it). Critically,
+  `connectOrRequestPermission()` does NOT check `permissionDenied` — so
+  `USB_DEVICE_ATTACHED` → `onDeviceAttached()` still retries correctly on replug.
+
+- **Do not place the `DISCONNECTED`-status check before the `attempt > 0` guard in the
+  `openConnection` retry loop.** The initial value of `_status` is `DISCONNECTED`. Checking
+  `_status.value.state == DISCONNECTED` on attempt 0 aborts every connection attempt before
+  it ever starts. The check is valid only for attempt > 0, where `closeConnection()` may
+  have set DISCONNECTED while the coroutine was suspended in `delay(CONNECT_RETRY_DELAY_MS)`.
+
 - **Do not remove `resetAndRescan()`.** It is the only recovery path when `permissionDenied` is
   set from an accidental dialog swipe or a suppressed-dialog first launch. Without it, the user
   must unplug and replug the camera or restart the app.
@@ -379,6 +452,36 @@ Six fixes are in place:
   prompt is now driven by a startup `LaunchedEffect` in `MainScreen` collecting `noSessionsExist`
   — not by tethered image arrival. The tethered path just silently drops the image and logs it.
   Adding a prompt there would fire when the user may not be on MainScreen at all.
+
+- **Do not let `readDataAndResponse` return a short payload.** It compares `received` against
+  the declared container length and returns null on a shortfall. Without that check a
+  mid-transfer USB hiccup yields a partial JPEG that is saved, renamed, shown in the review
+  pane and uploaded, with nothing indicating it is incomplete.
+
+- **Do not change `expectedPayloadBytes` to return a real size for the unknown-length
+  sentinel.** Cameras streaming without a declared length send 0xFFFFFFFF, which reads back as
+  -1 and must map to 0 — meaning "not declared, nothing to enforce". Returning a large
+  expectation would reject every such transfer as truncated and break tethering on those
+  bodies. Pinned by `PtpConnectionPayloadTest`.
+
+- **Do not simplify `teardownAfterPollFailure()` into a `closeConnection()` call.** It runs on
+  `pollingJob`, which `closeConnection()` cancels — the teardown would cancel itself partway
+  through. It also deliberately leaves `permissionDenied` alone so the caller can decide
+  whether the rescan may reconnect.
+
+- **Do not remove the `CancellationException` rethrow ahead of the poll loop's general
+  `catch`.** Without it a normal disconnect is treated as a fault: it runs the recovery path
+  and overwrites the DISCONNECTED status with a "Camera lost" error.
+
+- **Do not drop the failed handle from `knownHandles` bookkeeping.** A failed download removes
+  its handle so the 3 s diff-poll re-offers it; otherwise a shot lost to a transient bus error
+  is lost permanently. Capped at `MAX_DOWNLOAD_ATTEMPTS` so one unreadable object cannot loop.
+
+- **Do not treat `missedWhileDisconnected` as a basis for importing missed shots.** It is a
+  count comparison, not per-file identity: deleting images on the camera can mask a missed
+  shot, a swapped card reports a bogus number, and the baseline is in memory so a disconnect
+  spanning an app restart reports nothing. Fine for a warning; wrong for deciding what to
+  import. See "disconnected-shot recovery" in `.claude/prompts/field-readiness-pass.md`.
 
 ### Canon T7 notes
 - VID=0x04A9, PID=0x32E1
@@ -442,7 +545,7 @@ Six fixes are in place:
 - sortOrder — ordering value; defaults to captureSequence (added schema v7)
 
 ### UploadState (enum)
-- PENDING, UPLOADING, UPLOADED, FAILED, RETRY_REQUIRED
+- PENDING, UPLOADING, UPLOADED, FAILED
 
 ### ConnectionProfile
 - id (autoGenerate)
@@ -462,7 +565,10 @@ Six fixes are in place:
 - loggingEnabled (Boolean, default true)
 - autoRetryEnabled (Boolean, default true)
 - autoRetryIntervalSeconds (Int, default 4)
-- autoRetryMaxCount (Int, default -1 = continuous)
+- autoRetryMaxCount (Int, default 3; -1 = continuous) — bounded by default. Continuous
+  retries terminal failures (bad API key, 422, unregistered device) forever, re-uploading
+  the full file every interval. A one-time DataStore migration (`settings_schema_v` = 1)
+  rewrites a persisted -1 to 3 exactly once, so a later deliberate choice of Continuous sticks
 - sessionHistoryMax (Int, default 50; -1 = unlimited) — applied as SQL LIMIT in subquery
 - saveBackupToPhone (Boolean, default false) — copies to Pictures/PhotoFlow via MediaStore
 - autoDeleteBackups (Boolean, default false)
@@ -473,7 +579,10 @@ Six fixes are in place:
 - cloudDeviceDisplayName (String, default "") — friendly name sent on registration
 - cloudDeviceUuid (String, default "") — stable UUID generated once, persisted before first API call
 - cloudDeviceId (Int, default 0) — backend device id returned after registration; 0 means not registered
-- cloudApiKey (String, default "") — staging API key sent as `X-PhotoFlow-Api-Key` header; omitted when blank
+- **cloudApiKey is NOT an AppSettings field.** AppSettings is serialised verbatim into
+  DataStore in plaintext, so a field here would rewrite the key in the clear on every save.
+  It lives only in `CredentialStore`; `ConfigViewModel.cloudApiKey` / `setCloudApiKey()`
+  expose it to the UI. `SettingsKeys.CLOUD_API_KEY` survives for migration reads only
 - cloudStationName (String, default "") — optional station label sent with registration and photo uploads
 
 FTP credentials are stored in `ConnectionProfile` (Room), NOT in AppSettings.
@@ -485,7 +594,11 @@ At a glance, the operator should always be able to tell:
 - Whether live preview/capture is active (mode chip)
 - Whether uploads are succeeding (transfer queue panel)
 - Whether any files need retry (transfer queue shows FAILED/RETRY state)
-- Whether storage/system health is in a warning state (disk warning chip)
+- Whether any shots were missed while the camera was unplugged (red MissedShotsBanner)
+- Whether capture has moved to an earlier session (amber PastSessionBanner)
+
+(There is no disk/storage warning chip on MainScreen — real `StatFs` reporting lives only
+in ConfigScreen → GENERAL → STORAGE.)
 
 ## Avoid
 - Do not treat MainScreen as a generic gallery
@@ -503,6 +616,9 @@ At a glance, the operator should always be able to tell:
 - Do not add delays shorter than 800 ms after `claimInterface` on Samsung devices — the system MTP daemon needs that time to release the USB interface
 - Do not raise `FIRST_CHUNK_SIZE` or `CHUNK_SIZE` in `PtpConnection` without re-testing on Samsung One UI — oversize first-read requests break the endpoint silently
 - Do not use the default `viewModel()` for `MainScreen` in `NavGraph.kt` — it must be `viewModel(activity)` with `activity = LocalContext.current as ComponentActivity`, otherwise a second `MtpCameraManager` will be created and race for the USB interface
+- Do not change `android:launchMode` away from `singleTop` on `MainActivity` — `standard` launchMode causes Android to create a new Activity instance on every `USB_DEVICE_ATTACHED`, producing a second MtpCameraManager that races the existing one; observed as 3× `[APP] launched` in the same PID, zombie poll loops, all USB commands returning `sent=-1`
+- Do not remove `permissionDenied = true` from the exhausted-retry path in `openConnection` — without it, each failure causes the foreground rescan to immediately retry, cascading into compounding zombie PTP sessions; see HARD RULES above for the full recovery contract
+- Do not place the `_status == DISCONNECTED` check before the `attempt > 0` guard in `openConnection` — `_status` starts as `DISCONNECTED`, so checking it unconditionally aborts every connection before it starts; check only on retries (attempt > 0) where `closeConnection()` may have set it while suspended
 - Do not move USB I/O off `usbDispatcher` (the `PhotoFlow-USB` single-thread executor) — `bulkTransfer` calls crossing threads on the same `UsbDeviceConnection` break silently on Samsung
 - Do not "fix" the 1–3 s post-shot import latency on the Canon T7 by tightening the poll cadence — Canon `GetEvent` is silent on the T7 and the diff-poll is the actual delivery path
 - Do not use an implicit `Intent(ACTION)` inside a USB permission PendingIntent — always add `.setPackage(context.packageName)` to make it explicit; implicit broadcasts are silently dropped by `RECEIVER_NOT_EXPORTED` receivers on API 26+
@@ -541,3 +657,54 @@ At a glance, the operator should always be able to tell:
 - Do not send a new `idempotency_key` on retry — always use `image.id.toString()` as the
   stable key so the backend can deduplicate retries and return HTTP 200 with the same
   `photo_uid` instead of creating a duplicate record.
+- Do not register `FtpUploadWorker` or `CloudUploadWorker` — both are deleted; the single
+  `UploadWorker` handles both transport types by reading the active `ConnectionProfile` at
+  execution time. Registering the old class names will throw `ClassNotFoundException`.
+- Do not store FTP passwords in `ConnectionProfile.password` (Room) — always write blank to
+  Room and persist via `credentialStore.storeFtpPassword(profileId, password)`. Likewise, do
+  not write the Cloud API key to DataStore directly from new code; use
+  `credentialStore.storeCloudApiKey(key)` (the DataStore field is a migration fallback only).
+- Do not pass plain HTTP URLs that resolve to non-LAN hosts to `CloudApiClient` — the client
+  throws `IllegalArgumentException` in `openConnection()` for `http://` URLs whose host is
+  not classified as private by `PrivateAddressChecker`. Use `https://` for internet hosts.
+- Do not reintroduce `_overrideSessionId` or any "viewing session" separate from the active
+  session — the two capture paths must read one source of truth, or tethered shots silently
+  land in whichever session the operator happens to be reviewing
+- Do not read the active session from `activeSession.value` on the tethered path — that flow is
+  `WhileSubscribed`, and the poll loop runs with no UI subscribed after `moveTaskToBack`. Use
+  `repository.getActiveSession()`, which reads Room directly
+- Do not use `ExistingWorkPolicy.REPLACE` in the auto-retry loop — REPLACE resets WorkManager's
+  `runAttemptCount` to 0, so the executors' `runAttemptCount >= 10` cap can never trip. Use
+  `KEEP`. The manual RETRY button is the one place REPLACE is correct
+- Do not add `cloudApiKey` (or any secret) to `AppSettings` — it is serialised verbatim into
+  plaintext DataStore, so a field there rewrites the secret in the clear on every save
+- Do not add credentials to the settings export — it is written to shared Downloads storage,
+  readable by other apps and swept up by cloud backup. `SettingsExportTest` fails if a
+  secret-bearing key or value reappears
+- Do not pass `fallback = settings.cloudApiKey` to `getCloudApiKey()` — the fallback parameter
+  exists solely for the one-time DataStore migration; a fallback at a call site resurrects the
+  plaintext copy the migration removes
+- Do not assume Android excludes `shared_prefs` from backup — it does not. The encrypted
+  credential file needs an explicit `<exclude domain="sharedpref" …>` in both rule files
+- Do not perform blocking file I/O on the tethered path without `withContext(Dispatchers.IO)` —
+  `handleTetheredImage` runs on the single `PhotoFlow-USB` thread, so a full-size write there
+  stalls image polling for its duration
+- Do not add database or DataStore files to the Android backup set — `backup_rules.xml` and
+  `data_extraction_rules.xml` exclude `photoflow.db*` and `datastore/`. Restoring a backup
+  across devices would inject a stale Room schema and stale credentials into a fresh install.
+
+## Permissions
+
+| Permission | Why required | Graceful degradation |
+|---|---|---|
+| `CAMERA` | CameraX live preview and capture in Native Camera mode | No preview or CAPTURE button without it |
+| `INTERNET` | FTP and Cloud API uploads | Uploads fail; app still usable for capture |
+| `WRITE_EXTERNAL_STORAGE` (maxSdk=28) | Save images on Android ≤8 | Not needed on Android 9+ |
+| `ACCESS_WIFI_STATE` | Detect Wi-Fi connectivity for the SSID chip | Chip shows "WiFi not connected" |
+| `ACCESS_FINE_LOCATION` | Read Wi-Fi SSID via `WifiManager.connectionInfo` (required Android 8.1+) | Chip shows "WiFi Connected" without SSID |
+| `ACCESS_NETWORK_STATE` | Monitor network changes in `WifiSsidChip` | Chip may not update on network change |
+| `USB_PERMISSION` (dynamic) | Claim the USB interface for PTP/tethered DSLR | Tethered mode unavailable |
+
+`ACCESS_FINE_LOCATION` is never used for geolocation. It is required solely because Android
+8.1 (API 27) restricted SSID reads behind the location permission gate. The `WifiSsidChip`
+composable checks the permission at runtime and shows a degraded label when denied.

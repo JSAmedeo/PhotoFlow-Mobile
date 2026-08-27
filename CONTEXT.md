@@ -150,8 +150,12 @@ app/src/main/java/com/photoflowmobile/app/
 │   │   └── MtpCameraManager.kt      — Tethering lifecycle: single-thread USB dispatcher,
 │   │                                  connectionMutex, VendorAdapter selection, 500 ms poll
 │   │                                  loop + 3 s GetObjectHandles diff-poll fallback;
-│   │                                  permissionDenied flag, 8 s isConnecting timeout,
-│   │                                  5 s foreground rescan loop, resetAndRescan()
+│   │                                  permissionDenied flag (set on deny AND exhausted
+│   │                                  retries), 8 s isConnecting timeout, 5 s foreground
+│   │                                  rescan loop, resetAndRescan(); openConnection retry
+│   │                                  loop: attempt>0 DISCONNECTED check, stale UsbDevice
+│   │                                  refresh from deviceList, permissionDenied=true on
+│   │                                  failure
 │   └── worker/
 │       ├── FtpUploadWorker.kt       — WorkManager worker; real FTP via Apache Commons Net;
 │       │                              Result.success() on upload, Result.failure() on error;
@@ -317,7 +321,37 @@ needed.
    with an early `if (core != null) return@withLock` guard. All three are required — they
    cover the attach/deviceList-scan/permission-grant race window.
 
-6. **USB permission subsystem (Motorola / non-Samsung hosts).** `USB_DEVICE_ATTACHED` is NOT
+6. **`android:launchMode="singleTop"` on `MainActivity` — critical for single-instance
+   enforcement.** Without this, every `USB_DEVICE_ATTACHED` broadcast delivered while the
+   app is running creates a *new* `MainActivity` instance, a new `ViewModelStore`, a new
+   `MainViewModel`, and a new `MtpCameraManager`. Observed in production: three `[APP]
+   launched` log entries in the same PID within 15 s, three concurrent PTP sessions,
+   three zombie poll loops all returning `sent=-1` — requiring an app restart to recover.
+   `singleTop` routes the intent to `onNewIntent()` on the existing Activity instead.
+   `MainActivity.onNewIntent()` already calls `handleUsbIntent()` → `onUsbDeviceAttached()`.
+   **Do not change the launchMode.**
+
+7. **`openConnection` retry-loop guards (three load-bearing behaviours):**
+   - **Disconnect-during-retry abort:** At the start of each retry (attempt > 0) and again
+     after `delay(CONNECT_RETRY_DELAY_MS)`, the loop checks
+     `_status.value.state == DISCONNECTED`. When `onDeviceDetached` fires and
+     `closeConnection()` sets DISCONNECTED while the coroutine is suspended, this check
+     exits via `return@withLock` instead of continuing onto a stale `UsbDevice`. **Critical:
+     check only for `attempt > 0`.** `_status` starts as `DISCONNECTED` — checking it on
+     attempt 0 aborts every connection attempt before it starts (this exact bug shipped and
+     was reverted the same day).
+   - **Stale `UsbDevice` refresh:** On each attempt, the code looks up a fresh `UsbDevice`
+     from `usbManager.deviceList` by VID/PID. After a brief disconnect/reconnect, Android
+     creates a new device node; `openDevice()` on the original object silently returns null.
+   - **`permissionDenied = true` after exhausted retries:** When all attempts fail, this
+     flag blocks the 5-second foreground rescan from immediately retrying. Without it each
+     failure triggers a new `openConnection` that holds `connectionMutex` for ~9 s (3 retries
+     × 3 s delay), then fails, then the rescan retries again — compounding zombie sessions.
+     `connectOrRequestPermission()` bypasses this flag, so `USB_DEVICE_ATTACHED` from a
+     physical replug still retries correctly. The flag is reset by `onDeviceDetached()` and
+     `resetAndRescan()`.
+
+8. **USB permission subsystem (Motorola / non-Samsung hosts).** `USB_DEVICE_ATTACHED` is NOT
    dispatched to PhotoFlow on Motorola G 2025 — competing system apps claim it first. Six
    compensating mechanisms:
    - **`onResume` rescan:** `MainActivity.onResume()` → `rescanForAttachedCamera()` catches
@@ -325,9 +359,9 @@ needed.
    - **5 s foreground rescan loop:** `MtpCameraManager.init {}` polls `rescanForAttachedCamera()`
      every `FOREGROUND_RESCAN_MS = 5_000L` so cameras plugged while the app is already on-screen
      are detected without requiring the user to background/foreground the app.
-   - **`permissionDenied` flag:** Set when the user explicitly denies the USB dialog; prevents
-     the rescan loop from re-prompting every 5 s. Cleared in `onDeviceDetached()` so re-plugging
-     the cable re-enables asking.
+   - **`permissionDenied` flag:** Set when the user explicitly denies the USB dialog *or* when
+     `openConnection` exhausts all retries; prevents the rescan from re-prompting. Cleared in
+     `onDeviceDetached()` (cable re-plug) and `resetAndRescan()` (mode switch).
    - **8 s `isConnecting` timeout:** On first launch, the Android CAMERA permission dialog
      (triggered by ScanCardScreen's barcode viewfinder) can block the USB permission dialog.
      `isConnecting` resets to `false` after 8 s if `core` is still null, so the loop retries
@@ -354,9 +388,11 @@ VM scoping) are documented there with reproduction conditions.
   shots taken after connection are imported.
 
 ### Known rough edges (acceptable for now)
-- Detach cleanup: the poll loop can spam failing commands for up to ~15 s after the
-  device is unplugged before the session tears down cleanly. Not data-damaging, just
-  noisy in logcat.
+- Detach cleanup: when the cable is pulled, `closeConnection()` sends `SetEventMode(0)`,
+  `SetRemoteMode(0)`, and `CloseSession` to the camera — all fail silently with `sent=-1`
+  (expected, cable is gone). The session tears down in milliseconds; no lingering zombie
+  loops. The `System: A resource failed to call UsbDeviceConnection.close` GC warning
+  appearing ~2 s later is the old `UsbDeviceConnection` finalizer — harmless.
 - Canon GetEvent silence on T7 is camera-side behavior — not fixable from the Android
   side. The diff-poll fallback is the designed safety net for exactly this case.
 
@@ -368,10 +404,17 @@ VM scoping) are documented there with reproduction conditions.
 - **ML Kit barcode scanning** — Dependency in place; camera analysis use case not yet bound.
   Manual entry is the active path.
 - **EXIF strip** — ISO/shutter/aperture values in review pane are hardcoded placeholders.
-- **Tethered detach cleanup** — Poll loop logs 10–15 s of failing commands after device unplug
-  before teardown completes. Cosmetic; not data-damaging.
 - **Non-Canon DSLR validation** — `GenericPtpAdapter` + `NikonAdapter` are written to standard
   PTP spec but untested on actual hardware. Only Canon T7 has been physically verified.
+
+## Test history
+Manual test sessions are tracked in `TESTING.md`. Key entries:
+
+- **2026-07-06 — Tethering reliability (Samsung Galaxy + Canon T7, commit `f55abf5`).**
+  Three cable pull/replug cycles all succeeded on attempt 1 (~800 ms). Single `[APP] launched`
+  per process (no zombie MtpCameraManager instances). Images IMG_3546–3552 → FTP `Worker result
+  SUCCESS`. Pre-fix baseline (commit `dd19d9b`) showed three `[APP] launched` lines per process
+  and three concurrent zombie poll loops requiring an app restart to clear.
 
 ## Key implementation decisions
 - `ImageCapture` use case owned by `MainViewModel`, not the Composable.

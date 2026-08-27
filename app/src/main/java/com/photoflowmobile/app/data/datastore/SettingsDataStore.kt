@@ -9,12 +9,16 @@ import com.photoflowmobile.app.data.model.*
 val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "photoflow_settings")
 
 object SettingsKeys {
+    // Bumped when a stored settings value needs a one-time rewrite that a changed Kotlin
+    // default cannot deliver on its own. See PhotoFlowApplication.migrateSettingsSchema.
+    val SETTINGS_SCHEMA_V         = intPreferencesKey("settings_schema_v")
     val DEVICE_MODE               = stringPreferencesKey("device_mode")
     val DARK_MODE                 = booleanPreferencesKey("dark_mode")
     val NAMING_FIELDS             = stringPreferencesKey("naming_fields")
     val NAMING_SEPARATOR          = stringPreferencesKey("naming_separator")
     val NAMING_EXTENSION          = stringPreferencesKey("naming_extension")
     val LOGGING_ENABLED           = booleanPreferencesKey("logging_enabled")
+    val VERBOSE_LOGGING           = booleanPreferencesKey("verbose_logging")
     val AUTO_RETRY_ENABLED        = booleanPreferencesKey("auto_retry_enabled")
     val AUTO_RETRY_INTERVAL_SECS  = intPreferencesKey("auto_retry_interval_secs")
     val AUTO_RETRY_MAX_COUNT      = intPreferencesKey("auto_retry_max_count")
@@ -31,6 +35,9 @@ object SettingsKeys {
     val CLOUD_DEVICE_DISPLAY_NAME = stringPreferencesKey("cloud_device_display_name")
     val CLOUD_DEVICE_UUID         = stringPreferencesKey("cloud_device_uuid")
     val CLOUD_DEVICE_ID           = intPreferencesKey("cloud_device_id")
+    // Migration-only. The Cloud API key lives in CredentialStore; this key exists solely so
+    // PhotoFlowApplication can find and clear a plaintext copy left by an older build.
+    // Nothing may write to it.
     val CLOUD_API_KEY             = stringPreferencesKey("cloud_api_key")
     val CLOUD_STATION_NAME        = stringPreferencesKey("cloud_station_name")
 }
@@ -43,9 +50,10 @@ fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     namingSeparator        = prefs[SettingsKeys.NAMING_SEPARATOR] ?: "_",
     namingExtension        = prefs[SettingsKeys.NAMING_EXTENSION] ?: "JPG",
     loggingEnabled         = prefs[SettingsKeys.LOGGING_ENABLED] ?: true,
+    verboseLogging         = prefs[SettingsKeys.VERBOSE_LOGGING] ?: false,
     autoRetryEnabled       = prefs[SettingsKeys.AUTO_RETRY_ENABLED]       ?: true,
     autoRetryIntervalSeconds = prefs[SettingsKeys.AUTO_RETRY_INTERVAL_SECS] ?: 4,
-    autoRetryMaxCount      = prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     ?: -1,
+    autoRetryMaxCount      = prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     ?: 3,
     sessionHistoryMax      = prefs[SettingsKeys.SESSION_HISTORY_MAX]      ?: 50,
     saveBackupToPhone      = prefs[SettingsKeys.SAVE_BACKUP_TO_PHONE]     ?: false,
     autoDeleteBackups      = prefs[SettingsKeys.AUTO_DELETE_BACKUPS]      ?: false,
@@ -59,7 +67,6 @@ fun appSettingsFromPreferences(prefs: Preferences) = AppSettings(
     cloudDeviceDisplayName = prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] ?: "",
     cloudDeviceUuid        = prefs[SettingsKeys.CLOUD_DEVICE_UUID]         ?: "",
     cloudDeviceId          = prefs[SettingsKeys.CLOUD_DEVICE_ID]           ?: 0,
-    cloudApiKey            = prefs[SettingsKeys.CLOUD_API_KEY]             ?: "",
     cloudStationName       = prefs[SettingsKeys.CLOUD_STATION_NAME]        ?: ""
 )
 
@@ -70,6 +77,7 @@ fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.NAMING_SEPARATOR]         = namingSeparator
     prefs[SettingsKeys.NAMING_EXTENSION]         = namingExtension
     prefs[SettingsKeys.LOGGING_ENABLED]          = loggingEnabled
+    prefs[SettingsKeys.VERBOSE_LOGGING]          = verboseLogging
     prefs[SettingsKeys.AUTO_RETRY_ENABLED]       = autoRetryEnabled
     prefs[SettingsKeys.AUTO_RETRY_INTERVAL_SECS] = autoRetryIntervalSeconds
     prefs[SettingsKeys.AUTO_RETRY_MAX_COUNT]     = autoRetryMaxCount
@@ -85,6 +93,5 @@ fun AppSettings.toPreferences(prefs: MutablePreferences) {
     prefs[SettingsKeys.CLOUD_DEVICE_DISPLAY_NAME] = cloudDeviceDisplayName
     prefs[SettingsKeys.CLOUD_DEVICE_UUID]         = cloudDeviceUuid
     prefs[SettingsKeys.CLOUD_DEVICE_ID]           = cloudDeviceId
-    prefs[SettingsKeys.CLOUD_API_KEY]             = cloudApiKey
     prefs[SettingsKeys.CLOUD_STATION_NAME]        = cloudStationName
 }

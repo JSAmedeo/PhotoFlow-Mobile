@@ -16,36 +16,39 @@ data class AppColorScheme(
     val blue: Color,
     val warning: Color,
     val error: Color,
+    val cta: Color,
 )
 
 val darkAppColors = AppColorScheme(
-    background    = Color(0xFF07090B),
-    surface       = Color(0xFF101316),
-    surfaceRaised = Color(0xFF181C20),
-    border        = Color(0xFF2A3035),
-    borderActive  = Color(0xFF3A4148),
-    textPrimary   = Color(0xFFE8ECEF),
-    textSecondary = Color(0xFF8E969E),
-    textDisabled  = Color(0xFF5F676E),
-    green         = Color(0xFF7AC36A),
-    blue          = Color(0xFF5DADEC),
-    warning       = Color(0xFFFFB74D),
-    error         = Color(0xFFCF6679),
+    background    = Color(0xFF2A2D2E),  // warm charcoal
+    surface       = Color(0xFF3D4143),
+    surfaceRaised = Color(0xFF4F5456),
+    border        = Color(0x14FFFFFF),  // rgba(255,255,255,0.08)
+    borderActive  = Color(0x2EFFFFFF),  // rgba(255,255,255,0.18)
+    textPrimary   = Color(0xFFFFFFFF),
+    textSecondary = Color(0xFFC9CDCC),
+    textDisabled  = Color(0xFF8A8F8E),
+    green         = Color(0xFF6FC79A),  // mint — status / active / healthy
+    blue          = Color(0xFF6FC79A),  // mint (same)
+    warning       = Color(0xFFFFBB57),
+    error         = Color(0xFFE05870),
+    cta           = Color(0xFFE5683D),  // orange — primary action buttons only
 )
 
 val lightAppColors = AppColorScheme(
-    background    = Color(0xFFF0F2F4),
+    background    = Color(0xFFEFF2F5),
     surface       = Color(0xFFFFFFFF),
-    surfaceRaised = Color(0xFFE4E7EA),
-    border        = Color(0xFFC4C9CE),
-    borderActive  = Color(0xFF8E969E),
-    textPrimary   = Color(0xFF1A2229),
-    textSecondary = Color(0xFF4F5A63),
+    surfaceRaised = Color(0xFFE2E7EC),
+    border        = Color(0xFFBFC8D0),
+    borderActive  = Color(0xFF8E9AA4),
+    textPrimary   = Color(0xFF151D24),
+    textSecondary = Color(0xFF4A5660),
     textDisabled  = Color(0xFF8A949C),
-    green         = Color(0xFF2E8A3D),
-    blue          = Color(0xFF1F6FA6),
-    warning       = Color(0xFFC27700),
-    error         = Color(0xFFA02040),
+    green         = Color(0xFF1E9E32),
+    blue          = Color(0xFF1E9E32),
+    warning       = Color(0xFFC07A00),
+    error         = Color(0xFF9E1E32),
+    cta           = Color(0xFFD04A1A),
 )
 
 val LocalAppColors = staticCompositionLocalOf { darkAppColors }

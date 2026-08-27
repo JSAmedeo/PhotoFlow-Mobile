@@ -1,6 +1,6 @@
 package com.photoflowmobile.app.data.usb
 
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 

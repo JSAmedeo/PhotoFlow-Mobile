@@ -4,7 +4,7 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -42,6 +42,19 @@ class PtpConnection(
         // larger payloads too (we continue reading in CHUNK_SIZE chunks below).
         private const val FIRST_CHUNK_SIZE   = 512
         private const val CHUNK_SIZE         = 16_384
+
+        /**
+         * Payload size implied by a PTP container-length header.
+         *
+         * Cameras streaming data of unknown length send 0xFFFFFFFF, which reads back as -1.
+         * That — and any other header too short to contain a payload — yields 0, which callers
+         * must read as "length not declared, nothing to enforce" rather than "expect zero bytes".
+         * The truncation check in [readDataAndResponse] relies on this: a received count is never
+         * negative, so it can never be below a 0 expectation, and unknown-length transfers are
+         * left alone.
+         */
+        internal fun expectedPayloadBytes(containerLen: Int): Int =
+            (containerLen - HEADER_BYTES).coerceAtLeast(0)
     }
 
     private var txnId = 1
@@ -167,8 +180,8 @@ class PtpConnection(
             return null
         }
 
-        val expectedPayload = (containerLen - HEADER_BYTES).coerceAtLeast(0)
-        val payloadInFirst  = (firstRead   - HEADER_BYTES).coerceAtLeast(0)
+        val expectedPayload = expectedPayloadBytes(containerLen)
+        val payloadInFirst  = (firstRead - HEADER_BYTES).coerceAtLeast(0)
 
         val chunks = ArrayList<ByteArray>(4)
         if (payloadInFirst > 0) chunks.add(firstBuf.copyOfRange(HEADER_BYTES, firstRead))
@@ -180,6 +193,23 @@ class PtpConnection(
             if (n <= 0) break
             chunks.add(chunk.copyOf(n))
             received += n
+        }
+
+        // A truncated data phase must never surface as a valid payload. Without this check a
+        // mid-transfer USB hiccup yields a partial JPEG that gets saved, renamed, shown in the
+        // review pane and uploaded, with nothing anywhere indicating it is incomplete.
+        //
+        // Cameras that stream with an unknown container length send 0xFFFFFFFF, which reads back
+        // as -1 and coerces expectedPayload to 0 — that path is unaffected, since `received` is
+        // never negative.
+        if (received < expectedPayload) {
+            Log.e(TAG, "readDataAndResponse: TRUNCATED — expected $expectedPayload B, got $received B " +
+                    "(container=$containerLen)")
+            // Best-effort drain so a response container left queued by the aborted transfer does
+            // not get parsed as the *next* command's response. Bounded by its own timeout; the
+            // result is deliberately discarded because the transfer has already failed.
+            runCatching { readResponse() }
+            return null
         }
 
         val data = ByteArray(received)

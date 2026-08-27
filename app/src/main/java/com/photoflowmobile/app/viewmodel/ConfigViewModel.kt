@@ -11,17 +11,20 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import com.photoflowmobile.app.BuildConfig
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.cloud.CloudApiClient
 import com.photoflowmobile.app.data.cloud.CloudDeviceService
 import com.photoflowmobile.app.data.cloud.CloudManifestService
 import com.photoflowmobile.app.data.cloud.RegistrationResult
+import com.photoflowmobile.app.data.logging.PhotoFlowLog
 import com.photoflowmobile.app.data.datastore.SettingsKeys
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
 import com.photoflowmobile.app.data.datastore.toPreferences
 import com.photoflowmobile.app.data.model.*
+import com.photoflowmobile.app.data.settings.SettingsExport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -38,14 +41,20 @@ import java.util.UUID
 
 sealed class SettingsTransferResult {
     data class ExportSuccess(val displayPath: String) : SettingsTransferResult()
-    object ImportSuccess : SettingsTransferResult()
+    /** [profilesNeedingPassword] names the FTP profiles whose passwords must be re-entered. */
+    data class ImportSuccess(
+        val profilesNeedingPassword: List<String> = emptyList(),
+        val apiKeyNeeded: Boolean = false
+    ) : SettingsTransferResult()
     data class Error(val message: String) : SettingsTransferResult()
 }
 
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dataStore = application.settingsDataStore
-    private val db = (application as PhotoFlowApplication).database
+    private val app = application as PhotoFlowApplication
+    private val db = app.database
+    private val credentialStore = app.credentialStore
     private val connectionProfileDao = db.connectionProfileDao()
     private val sessionDao = db.sessionDao()
     private val sessionImageDao = db.sessionImageDao()
@@ -93,16 +102,40 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             }
             // Reset to PENDING — keeps same id (= idempotency_key / local_photo_id)
             sessionImageDao.update(image.copy(uploadState = com.photoflowmobile.app.data.model.UploadState.PENDING, errorMessage = null))
+            val constraints = androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                .build()
             androidx.work.WorkManager.getInstance(getApplication())
                 .enqueueUniqueWork(
                     "upload_${image.id}",
                     androidx.work.ExistingWorkPolicy.REPLACE,
-                    androidx.work.OneTimeWorkRequestBuilder<com.photoflowmobile.app.data.worker.CloudUploadWorker>()
-                        .setInputData(androidx.work.workDataOf(com.photoflowmobile.app.data.worker.CloudUploadWorker.KEY_IMAGE_ID to image.id))
+                    androidx.work.OneTimeWorkRequestBuilder<com.photoflowmobile.app.data.worker.UploadWorker>()
+                        .setInputData(androidx.work.workDataOf(com.photoflowmobile.app.data.worker.UploadWorker.KEY_IMAGE_ID to image.id))
+                        .setConstraints(constraints)
+                        .setBackoffCriteria(
+                            androidx.work.BackoffPolicy.EXPONENTIAL,
+                            androidx.work.WorkRequest.MIN_BACKOFF_MILLIS,
+                            java.util.concurrent.TimeUnit.MILLISECONDS
+                        )
                         .build()
                 )
             _debugRetryState.value = "Retrying id=${image.id} idempotency_key=${image.id} prev_uid=${image.cloudPhotoUid ?: "none"}"
         }
+    }
+
+    /**
+     * The Cloud API key, read from and written to [credentialStore] only.
+     *
+     * Kept off [AppSettings] deliberately: that model is serialised straight into DataStore in
+     * plaintext, so a field there meant every unrelated settings save rewrote the key in the
+     * clear. Backed by a MutableStateFlow because EncryptedSharedPreferences is not observable.
+     */
+    private val _cloudApiKey = MutableStateFlow(credentialStore.getCloudApiKey())
+    val cloudApiKey: StateFlow<String> = _cloudApiKey.asStateFlow()
+
+    fun setCloudApiKey(key: String) {
+        credentialStore.storeCloudApiKey(key)
+        _cloudApiKey.value = key
     }
 
     fun save(settings: AppSettings) {
@@ -111,15 +144,25 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun getFtpPassword(profileId: Long): String = credentialStore.getFtpPassword(profileId)
+
     fun upsertProfile(profile: ConnectionProfile) {
         viewModelScope.launch {
-            if (profile.id == 0L) connectionProfileDao.insert(profile)
-            else connectionProfileDao.update(profile)
+            // Store FTP password in CredentialStore; blank it in Room so it is never persisted plaintext
+            if (profile.password.isNotBlank()) {
+                credentialStore.storeFtpPassword(profile.id, profile.password)
+            }
+            val sanitized = profile.copy(password = "")
+            if (sanitized.id == 0L) connectionProfileDao.insert(sanitized)
+            else connectionProfileDao.update(sanitized)
         }
     }
 
     fun deleteProfile(profile: ConnectionProfile) {
-        viewModelScope.launch { connectionProfileDao.delete(profile) }
+        viewModelScope.launch {
+            credentialStore.removeFtpPassword(profile.id)
+            connectionProfileDao.delete(profile)
+        }
     }
 
     fun setActiveProfile(profile: ConnectionProfile) {
@@ -144,7 +187,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                     try {
                         ftp.connectTimeout = 5_000
                         ftp.connect(profile.host, profile.port)
-                        val ok = ftp.login(profile.username, profile.password)
+                        val password = credentialStore.getFtpPassword(profile.id)
+                        val ok = ftp.login(profile.username, password)
                         ftp.logout()
                         if (ok) null else "Login failed — check username and password"
                     } catch (e: java.net.SocketTimeoutException) {
@@ -162,7 +206,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             ConnectionType.CLOUD_API -> viewModelScope.launch {
                 val error: String? = withContext(Dispatchers.IO) {
                     try {
-                        val (status, body) = CloudApiClient(profile.host, settings.value.cloudApiKey).get("/health")
+                        val apiKey = credentialStore.getCloudApiKey()
+                        val (status, body) = CloudApiClient(profile.host, apiKey).get("/health")
                         if (status == 200 && body.contains("ok")) null
                         else if (status == 401) "Auth error (401) — check API key"
                         else "Unexpected response: HTTP $status"
@@ -201,8 +246,9 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             val displayName = s.cloudDeviceDisplayName.ifBlank { "PhotoFlow Device" }
             _cloudRegistrationState.value = "Registering…"
             try {
+                val apiKey = credentialStore.getCloudApiKey()
                 when (val result = CloudDeviceService.register(
-                    CloudApiClient(profile.host, s.cloudApiKey),
+                    CloudApiClient(profile.host, apiKey),
                     setupCode      = s.cloudSetupCode,
                     deviceUuid     = uuid,
                     displayName    = displayName,
@@ -249,12 +295,74 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             }
             _manifestResult.value = "Fetching…"
             try {
+                val apiKey = credentialStore.getCloudApiKey()
                 _manifestResult.value = CloudManifestService.fetch(
-                    CloudApiClient(profile.host, settings.value.cloudApiKey), sessionKey, venueId
+                    CloudApiClient(profile.host, apiKey), sessionKey, venueId
                 )
             } catch (e: Exception) {
                 _manifestResult.value = "Error: ${e.message}"
             }
+        }
+    }
+
+    /**
+     * Writes the on-device logs to a single text file in Downloads.
+     *
+     * Exists so an operator can retrieve a session's logs without a laptop or ADB. Logcat is
+     * RAM-only and does not survive a reboot, so after a field test it is routinely empty —
+     * this and the file log behind it are the only durable record.
+     */
+    fun exportLogs(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = PhotoFlowLog.logFiles()
+                if (files.isEmpty()) {
+                    _transferResult.value = SettingsTransferResult.Error(
+                        "No logs on device yet — check Enable logging is on"
+                    )
+                    return@launch
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+                val fileName = "photoflow-logs-$stamp.txt"
+                // Oldest first so the export reads chronologically.
+                val body = buildString {
+                    files.sortedBy { it.name }.forEach { f ->
+                        append("===== ").append(f.name).append(" (")
+                            .append(f.length()).append(" bytes) =====\n")
+                        append(runCatching { f.readText() }.getOrElse { "<unreadable: ${it.message}>\n" })
+                        append('\n')
+                    }
+                }
+                writeToDownloads(context, fileName, body, "text/plain")
+                _transferResult.value = SettingsTransferResult.ExportSuccess("Downloads/$fileName")
+            } catch (e: Exception) {
+                _transferResult.value = SettingsTransferResult.Error("Log export failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Shared by the settings and log exports — MediaStore on Q+, direct path below. */
+    private fun writeToDownloads(context: Context, fileName: String, body: String, mime: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, mime)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("Could not create file in Downloads")
+            resolver.openOutputStream(uri)?.use { out ->
+                OutputStreamWriter(out).use { it.write(body) }
+            }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            java.io.File(dir, fileName).writeText(body)
         }
     }
 
@@ -271,6 +379,9 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 val json = JSONObject().apply {
                     put("version", 1)
                     put("exported_at", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date()))
+                    // Explicit marker so a future importer can tell "no secrets in this file"
+                    // from "secrets present but empty", and so the file is self-describing.
+                    put("secrets_included", false)
                     put("settings", settingsToJson(currentSettings))
                     put("connection_profiles", profilesToJson(profiles))
                 }
@@ -320,43 +431,37 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 dataStore.edit { prefs -> newSettings.toPreferences(prefs) }
 
                 val profilesJson = root.optJSONArray("connection_profiles")
+                val needPassword = mutableListOf<String>()
                 if (profilesJson != null) {
-                    connectionProfileDao.deleteAll()
-                    for (i in 0 until profilesJson.length()) {
-                        connectionProfileDao.insert(profileFromJson(profilesJson.getJSONObject(i)))
+                    // Drop the credentials belonging to the profiles being replaced, otherwise
+                    // deleteAll() strands them under ids nothing references any more.
+                    connectionProfileDao.getAllProfilesOnce()
+                        .forEach { credentialStore.removeFtpPassword(it.id) }
+                    db.withTransaction {
+                        connectionProfileDao.deleteAll()
+                        for (i in 0 until profilesJson.length()) {
+                            val parsed = profileFromJson(profilesJson.getJSONObject(i))
+                            connectionProfileDao.insert(parsed)
+                            if (parsed.connectionType == ConnectionType.FTP) needPassword += parsed.name
+                        }
                     }
                 }
 
-                _transferResult.value = SettingsTransferResult.ImportSuccess
+                // Exports carry no secrets, so the operator has to supply them again. Name what
+                // is missing rather than leaving uploads to fail later with an auth error.
+                _transferResult.value = SettingsTransferResult.ImportSuccess(
+                    profilesNeedingPassword = needPassword,
+                    apiKeyNeeded = credentialStore.getCloudApiKey().isBlank()
+                )
             } catch (e: Exception) {
                 _transferResult.value = SettingsTransferResult.Error("Import failed: ${e.message}")
             }
         }
     }
 
-    private fun settingsToJson(s: AppSettings) = JSONObject().apply {
-        put("device_mode", s.deviceMode.name)
-        put("dark_mode", s.darkMode)
-        put("naming_fields", serializeNamingFields(s.namingFields))
-        put("naming_separator", s.namingSeparator)
-        put("naming_extension", s.namingExtension)
-        put("logging_enabled", s.loggingEnabled)
-        put("auto_retry_enabled", s.autoRetryEnabled)
-        put("auto_retry_interval_secs", s.autoRetryIntervalSeconds)
-        put("auto_retry_max_count", s.autoRetryMaxCount)
-        put("session_history_max", s.sessionHistoryMax)
-        put("save_backup_to_phone", s.saveBackupToPhone)
-        put("auto_delete_backups", s.autoDeleteBackups)
-        put("auto_delete_after_days", s.autoDeleteAfterDays)
-        put("orientation_lock_enabled", s.orientationLockEnabled)
-        put("orientation_lock", s.orientationLock.name)
-        put("cloud_setup_code", s.cloudSetupCode)
-        put("cloud_venue_slug", s.cloudVenueSlug)
-        put("cloud_venue_id", s.cloudVenueId)
-        put("cloud_device_display_name", s.cloudDeviceDisplayName)
-        put("cloud_api_key", s.cloudApiKey)
-        put("cloud_station_name", s.cloudStationName)
-    }
+    // Content lives in SettingsExport so the "no credentials in the export" rule is
+    // unit-testable without a JSON implementation on the JVM. See SettingsExportTest.
+    private fun settingsToJson(s: AppSettings) = JSONObject(SettingsExport.settingsToMap(s))
 
     private fun settingsFromJson(j: JSONObject) = AppSettings(
         deviceMode = DeviceMode.entries.firstOrNull { it.name == j.optString("device_mode") }
@@ -368,7 +473,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         loggingEnabled = j.optBoolean("logging_enabled", true),
         autoRetryEnabled = j.optBoolean("auto_retry_enabled", true),
         autoRetryIntervalSeconds = j.optInt("auto_retry_interval_secs", 4),
-        autoRetryMaxCount = j.optInt("auto_retry_max_count", -1),
+        autoRetryMaxCount = j.optInt("auto_retry_max_count", 3),
         sessionHistoryMax = j.optInt("session_history_max", 50),
         saveBackupToPhone = j.optBoolean("save_backup_to_phone", false),
         autoDeleteBackups = j.optBoolean("auto_delete_backups", false),
@@ -376,28 +481,19 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         orientationLockEnabled = j.optBoolean("orientation_lock_enabled", false),
         orientationLock = OrientationLock.entries.firstOrNull { it.name == j.optString("orientation_lock") }
             ?: OrientationLock.LANDSCAPE,
-        cloudSetupCode = j.optString("cloud_setup_code", ""),
         cloudVenueSlug = j.optString("cloud_venue_slug", ""),
         cloudVenueId = j.optInt("cloud_venue_id", 0),
         cloudDeviceDisplayName = j.optString("cloud_device_display_name", ""),
-        cloudApiKey = j.optString("cloud_api_key", ""),
         cloudStationName = j.optString("cloud_station_name", "")
-        // uuid and device_id intentionally not imported — they're device identity, not config
+        // Intentionally not imported:
+        //  - uuid and device_id: device identity, not config
+        //  - cloud_api_key and cloud_setup_code: credentials. Older exports may still contain
+        //    them; ignoring the fields means importing such a file cannot reintroduce a secret
+        //    into plaintext settings.
     )
 
     private fun profilesToJson(profiles: List<ConnectionProfile>) = JSONArray().apply {
-        profiles.forEach { p ->
-            put(JSONObject().apply {
-                put("name", p.name)
-                put("connection_type", p.connectionType.name)
-                put("host", p.host)
-                put("port", p.port)
-                put("username", p.username)
-                put("password", p.password)
-                put("remote_path", p.remotePath)
-                put("is_active", p.isActive)
-            })
-        }
+        profiles.forEach { put(JSONObject(SettingsExport.profileToMap(it))) }
     }
 
     private fun profileFromJson(j: JSONObject) = ConnectionProfile(
@@ -407,8 +503,11 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         host = j.optString("host"),
         port = j.optInt("port", 21),
         username = j.optString("username"),
-        password = j.optString("password"),
+        // Always blank, even when importing an older export that still carries a password —
+        // reading it would write a secret this build refuses to store.
+        password = "",
         remotePath = j.optString("remote_path", "/"),
+        photoOp = j.optString("photo_op", ""),
         isActive = j.optBoolean("is_active", false)
     )
 }

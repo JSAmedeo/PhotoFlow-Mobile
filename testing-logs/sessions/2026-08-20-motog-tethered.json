@@ -1,0 +1,16 @@
+{
+  "date": "2026-08-20",
+  "label": "motog-tethered",
+  "images": 17,
+  "sessions_created": 14,
+  "uploaded": 17,
+  "failed": 0,
+  "pending": 0,
+  "max_retry": 0,
+  "misattributed": 0,
+  "dup_seq": 0,
+  "gap_seq": 0,
+  "rapid_captures": 1,
+  "alltime_images": 148,
+  "alltime_not_uploaded": 0
+}

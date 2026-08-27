@@ -11,10 +11,16 @@ import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.WorkRequest
 import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 import com.photoflowmobile.app.PhotoFlowApplication
 import com.photoflowmobile.app.data.datastore.appSettingsFromPreferences
 import com.photoflowmobile.app.data.datastore.settingsDataStore
@@ -37,13 +43,12 @@ import com.photoflowmobile.app.data.model.ConnectionType
 import com.photoflowmobile.app.data.repository.SessionRepository
 import com.photoflowmobile.app.data.usb.MtpCameraManager
 import com.photoflowmobile.app.data.usb.TetheredStatus
-import com.photoflowmobile.app.data.worker.CloudUploadWorker
-import com.photoflowmobile.app.data.worker.FtpUploadWorker
+import com.photoflowmobile.app.data.worker.UploadWorker
 import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
+import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log
 import androidx.datastore.preferences.core.edit
 import com.photoflowmobile.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +69,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dataStore = application.settingsDataStore
     private val db = (application as PhotoFlowApplication).database
     private val repository = SessionRepository(
+        db = db,
         sessionDao = db.sessionDao(),
         sessionImageDao = db.sessionImageDao()
     )
@@ -133,11 +139,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .map { sessions -> sessions.firstOrNull { it.status == "active" } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    private val _overrideSessionId = MutableStateFlow<Long?>(null)
+    // Selection IS activation. There is no separate "viewing" session: tapping a row in Session
+    // History activates that session (see selectSession), so every consumer of selectedSessionId
+    // — thumbnails, review pane, shot count — follows the one active session, and both capture
+    // paths write to it. An earlier override-based model let tethered shots land in a session the
+    // operator was merely reviewing.
+    val selectedSessionId: StateFlow<Long?> = activeSession
+        .map { it?.id }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val selectedSessionId: StateFlow<Long?> = combine(_overrideSessionId, activeSession) { override, active ->
-        override ?: active?.id
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    // True when the active session is not the most recently started one — i.e. the operator has
+    // deliberately switched capture back to an earlier session. Drives the MainScreen banner so a
+    // stray tap in Session History can never silently misfile shots.
+    val pastSessionActive: StateFlow<Boolean> = repository.getAllSessions()
+        .map { sessions ->
+            val active = sessions.firstOrNull { it.status == "active" } ?: return@map false
+            val newest = sessions.maxByOrNull { it.startTime } ?: return@map false
+            active.id != newest.id
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val transferQueue: StateFlow<List<SessionImage>> = repository.getTransferQueue()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -173,13 +194,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectReviewImage(imageId: Long) { _reviewImageId.value = imageId }
 
-    val selectedSession: StateFlow<Session?> = selectedSessionId
-        .flatMapLatest { id ->
-            if (id != null) repository.getAllSessions().map { sessions -> sessions.firstOrNull { it.id == id } }
-            else flowOf(null)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
     // ── Tethered DSLR (USB MTP) ───────────────────────────────────────────────
 
     private val mtpCameraManager = MtpCameraManager(
@@ -190,6 +204,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val tetheredStatus: StateFlow<TetheredStatus> = mtpCameraManager.status
     val liveViewFrame: StateFlow<ByteArray?>      = mtpCameraManager.liveViewFrame
+
+    /**
+     * Count of shots that appeared on the camera card while the cable was disconnected and were
+     * therefore never imported. 0 when there is nothing to report.
+     *
+     * This is a warning only — the images are not recovered. See "disconnected-shot recovery" in
+     * .claude/prompts/field-readiness-pass.md for the deferred feature that would import them.
+     */
+    val missedWhileDisconnected: StateFlow<Int> = mtpCameraManager.missedWhileDisconnected
+    fun dismissMissedWarning() = mtpCameraManager.dismissMissedWarning()
 
     // ── No-session prompt ─────────────────────────────────────────────────────
 
@@ -207,7 +231,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         pipelineLog("[IMAGE] detected: $cameraFilename (${data.size / 1024}KB)")
 
-        val session = selectedSession.value
+        // Read straight from Room, not from a WhileSubscribed StateFlow: this path runs on the
+        // USB poll loop and may fire while the app is backgrounded with no UI subscribed, where
+        // `.value` would be stale or still null.
+        val session = repository.getActiveSession()
         if (session == null) {
             Log.w(PIPELINE_TAG, "[IMAGE] dropped — no active session")
             return
@@ -224,7 +251,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val captureCode = buildCaptureCode(session, seq)
             pipelineLog("[IMAGE] renamed: $cameraFilename → $filename (session=${session.sessionKey} seq=$seq captureCode=$captureCode)")
             val file = File(outputDir, filename)
-            try { file.writeBytes(data) }
+            // This whole path runs on the single PhotoFlow-USB thread (the poll loop calls
+            // onImageReceived directly), so a 25 MB write here stalls image polling for its
+            // duration. Stay inside captureMutex — the filename depends on the sequence number —
+            // but push the blocking write onto the IO pool.
+            try { withContext(Dispatchers.IO) { file.writeBytes(data) } }
             catch (e: Exception) { Log.e(PIPELINE_TAG, "[IMAGE] save failed: $filename", e); return@withLock null }
             val id = try {
                 repository.saveImage(
@@ -287,9 +318,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun saveBackupIfEnabled(filename: String, sourceFile: File) {
+    // Copies a full-size image, so it must never run on the caller's thread: the tethered path
+    // calls it from the PhotoFlow-USB poll thread (stalling image import) and the native path
+    // from the main thread (janking the UI mid-shoot).
+    private suspend fun saveBackupIfEnabled(filename: String, sourceFile: File) = withContext(Dispatchers.IO) {
         val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
-        if (!settings.saveBackupToPhone) return
+        if (!settings.saveBackupToPhone) return@withContext
         val context = getApplication<Application>()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -325,16 +359,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── Upload dispatch ───────────────────────────────────────────────────────
 
     private fun buildUploadRequest(imageId: Long): androidx.work.OneTimeWorkRequest =
-        when (activeConnection.value?.connectionType) {
-            ConnectionType.CLOUD_API ->
-                OneTimeWorkRequestBuilder<CloudUploadWorker>()
-                    .setInputData(workDataOf(CloudUploadWorker.KEY_IMAGE_ID to imageId))
+        OneTimeWorkRequestBuilder<UploadWorker>()
+            .setInputData(workDataOf(UploadWorker.KEY_IMAGE_ID to imageId))
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
-            else ->
-                OneTimeWorkRequestBuilder<FtpUploadWorker>()
-                    .setInputData(workDataOf(FtpUploadWorker.KEY_IMAGE_ID to imageId))
-                    .build()
-        }
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
+            .build()
 
     private fun enqueueUpload(imageId: Long, imageName: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val context = getApplication<Application>()
@@ -366,10 +399,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pipelineLog("[CLOUD] registration skipped — no setup code configured")
                 return@launch
             }
-            pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=$setupCode")
+            val codeLen = setupCode.length
+            pipelineLog("[CLOUD] registering device uuid=$uuid setupCode=***${codeLen}chars")
             try {
+                val appInstance = getApplication<PhotoFlowApplication>()
+                val apiKey = appInstance.credentialStore.getCloudApiKey()
                 when (val result = CloudDeviceService.register(
-                    CloudApiClient(baseUrl, settings.cloudApiKey),
+                    CloudApiClient(baseUrl, apiKey),
                     setupCode      = setupCode,
                     deviceUuid     = uuid,
                     displayName    = displayName,
@@ -402,20 +438,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ── Auto-retry loop ───────────────────────────────────────────────────────
+    //
+    // Architecture: WorkManager is the durable retry engine (Result.retry() + CONNECTED
+    // constraint + EXPONENTIAL backoff). This loop is the UI-facing supplement: it exists to
+    // honour the user-configurable autoRetryEnabled / interval / max-count settings and to
+    // bump the visible retryCount counter that the transfer-queue dialog shows.
+    //
+    // To avoid a duplicate upload when both paths fire at the same time, we check the
+    // WorkManager state before enqueuing: if WorkManager already has a job ENQUEUED, RUNNING,
+    // or BLOCKED for that image, we skip the re-enqueue (the worker is already in flight).
 
     private fun startAutoRetryLoop() {
         viewModelScope.launch {
+            val context = getApplication<Application>()
+            // Ids already reported as exhausted, so the loop logs that once per image instead of
+            // every interval. Entries are dropped when the image leaves the failed set (retried
+            // by hand, or finally uploaded).
+            val loggedExhausted = mutableSetOf<Long>()
             while (true) {
                 val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
                 if (settings.autoRetryEnabled) {
-                    repository.getFailedImages().first().forEach { image ->
+                    val failed = repository.getFailedImages().first()
+                    loggedExhausted.retainAll(failed.map { it.id }.toSet())
+                    failed.forEach { image ->
                         val withinLimit = settings.autoRetryMaxCount == -1 ||
                                 image.retryCount < settings.autoRetryMaxCount
+                        if (!withinLimit && loggedExhausted.add(image.id)) {
+                            pipelineLog("[UPLOAD] retry limit reached: ${image.filename} id=${image.id} " +
+                                    "after ${image.retryCount} attempt(s) — tap RETRY to try again")
+                        }
                         if (withinLimit) {
-                            // Increment retry count only — keep FAILED state and error message visible
-                            repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
-                            enqueueUpload(image.id, image.filename, ExistingWorkPolicy.REPLACE)
-                            pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} attempt=${image.retryCount + 1}")
+                            // Skip if WorkManager already has an active job for this image
+                            val infos = withContext(Dispatchers.IO) {
+                                WorkManager.getInstance(context)
+                                    .getWorkInfosForUniqueWork("upload_${image.id}").get()
+                            }
+                            val alreadyQueued = infos.any { info ->
+                                info.state in listOf(
+                                    WorkInfo.State.ENQUEUED,
+                                    WorkInfo.State.RUNNING,
+                                    WorkInfo.State.BLOCKED
+                                )
+                            }
+                            if (!alreadyQueued) {
+                                // Increment retry count only — keep FAILED state and error message visible
+                                repository.updateImageState(image.copy(retryCount = image.retryCount + 1))
+                                // KEEP, never REPLACE: REPLACE tears down the existing work request
+                                // and resets WorkManager's runAttemptCount to 0, so the executors'
+                                // `runAttemptCount >= 10` cap could never trip. The alreadyQueued
+                                // check above already prevents duplicates; KEEP is the backstop.
+                                enqueueUpload(image.id, image.filename, ExistingWorkPolicy.KEEP)
+                                pipelineLog("[UPLOAD] retrying: ${image.filename} id=${image.id} " +
+                                        "attempt=${image.retryCount + 1}/${settings.autoRetryMaxCount.takeIf { it != -1 } ?: "∞"}")
+                            }
                         }
                     }
                     delay(settings.autoRetryIntervalSeconds * 1_000L)
@@ -456,20 +531,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Session started / completed
-        var prevActiveId: Long? = null
+        // Session started / switched / completed
         var prevActiveSession: Session? = null
         viewModelScope.launch {
             activeSession.collect { session ->
-                if (session?.id != prevActiveId && prevActiveId != null) {
-                    _overrideSessionId.value = null
+                val prev = prevActiveSession
+                when {
+                    session != null && prev == null -> {
+                        pipelineLog("[SESSION] started: barcode=${session.barcode}")
+                        _showNoSessionPrompt.value = false
+                    }
+                    // Switching straight from one session to another happens when the operator
+                    // picks an earlier session in Session History, or re-scans a known card.
+                    session != null && prev != null && session.id != prev.id -> {
+                        pipelineLog("[SESSION] switched: barcode=${prev.barcode} -> ${session.barcode}")
+                        _showNoSessionPrompt.value = false
+                    }
+                    session == null && prev != null ->
+                        pipelineLog("[SESSION] completed: barcode=${prev.barcode}")
                 }
-                if (session != null && prevActiveSession == null) {
-                    pipelineLog("[SESSION] started: barcode=${session.barcode}")
-                    _showNoSessionPrompt.value = false
-                } else if (session == null && prevActiveSession != null)
-                    pipelineLog("[SESSION] completed: barcode=${prevActiveSession!!.barcode}")
-                prevActiveId = session?.id
                 prevActiveSession = session
             }
         }
@@ -510,10 +590,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // or isConnecting state and immediately rescan. This handles the first-launch case where
         // the Android CAMERA dialog suppressed the USB dialog, and the accidental-swipe case
         // where permissionDenied was set and the retry loop permanently stopped.
+        //
+        // IMPORTANT: only fires on an explicit NATIVE→TETHERED transition, NOT on the initial
+        // DataStore value. A StateFlow emits its current value to every new collector, so using
+        // .filter { == TETHERED_DSLR }.collect { resetAndRescan() } would fire resetAndRescan()
+        // on every app start/process-death restart — racing with the MtpCameraManager.init{}
+        // device scan that is already in progress. That race clears isConnecting while openConnection
+        // is in its 800ms Samsung sleep, allowing a second openConnection to queue, which then
+        // resets the USB endpoint (SET_INTERFACE + CLEAR_HALT) and poisons both sessions.
+        var prevDeviceMode: DeviceMode? = null
         viewModelScope.launch {
-            deviceMode
-                .filter { it == DeviceMode.TETHERED_DSLR }
-                .collect { mtpCameraManager.resetAndRescan() }
+            deviceMode.collect { mode ->
+                val transitionToTethered = prevDeviceMode != null
+                        && prevDeviceMode != DeviceMode.TETHERED_DSLR
+                        && mode == DeviceMode.TETHERED_DSLR
+                prevDeviceMode = mode
+                if (transitionToTethered) mtpCameraManager.resetAndRescan()
+            }
         }
 
         // Auto-register with cloud API when a CLOUD_API profile becomes active and device is not yet registered
@@ -528,8 +621,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
+    /**
+     * Makes [sessionId] the active session.
+     *
+     * Selection is activation: the operator may need to add a shot to an earlier session, so
+     * picking one in Session History moves capture there — both native and tethered. MainScreen
+     * shows a persistent banner ([pastSessionActive]) whenever the active session is not the
+     * newest, so this can never happen invisibly.
+     */
     fun selectSession(sessionId: Long) {
-        _overrideSessionId.value = sessionId
+        viewModelScope.launch { repository.activateSession(sessionId) }
+    }
+
+    /** Activates the most recently started session — backs the banner's GO TO NEWEST action. */
+    fun activateNewestSession() {
+        viewModelScope.launch {
+            val newest = repository.getAllSessions().first().maxByOrNull { it.startTime } ?: return@launch
+            repository.activateSession(newest.id)
+        }
     }
 
     fun forceRetry(imageId: Long) {
@@ -576,13 +685,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val filename = buildFilename(settings, session.barcode, seq)
                                 val captureCode = buildCaptureCode(session, seq)
                                 val finalFile = File(outputDir, filename)
-                                // renameTo is atomic on the same filesystem; fallback to copy+delete
-                                if (!tempFile.renameTo(finalFile)) {
-                                    try { tempFile.copyTo(finalFile, overwrite = true); tempFile.delete() }
-                                    catch (e: Exception) {
-                                        Log.e(PIPELINE_TAG, "capture: rename failed $filename", e)
-                                        return@withLock null
-                                    }
+                                // renameTo is atomic on the same filesystem; fallback to copy+delete.
+                                // On IO because this callback runs on the main thread, and the
+                                // copy fallback would otherwise block the UI for a full-size file.
+                                val renamed = withContext(Dispatchers.IO) {
+                                    if (tempFile.renameTo(finalFile)) true
+                                    else runCatching {
+                                        tempFile.copyTo(finalFile, overwrite = true); tempFile.delete()
+                                    }.isSuccess
+                                }
+                                if (!renamed) {
+                                    Log.e(PIPELINE_TAG, "capture: rename failed $filename")
+                                    return@withLock null
                                 }
                                 val id = try {
                                     repository.saveImage(
