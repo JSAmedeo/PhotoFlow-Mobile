@@ -1,5 +1,6 @@
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -10,6 +11,35 @@ plugins {
 
 val buildTime: String = SimpleDateFormat("yyyyMMdd-HHmm").format(Date())
 
+// ── Iterating build number ───────────────────────────────────────────────────
+//
+// Every debug build gets its own number, carried in versionName and the APK filename, so an
+// installed build is identifiable from `adb shell dumpsys package` alone. Without it every build
+// reported the same "1.2" and there was no way to tell which one a handset was running — which
+// bit during field testing, when a stale APK from a failed build sat in the output directory
+// looking current.
+//
+// Only increments when actually assembling or installing. Configuration runs for every Gradle
+// invocation (`tasks`, `test`, an IDE sync), and incrementing on those would inflate the count
+// without producing an APK.
+val buildNumberFile = file("build-number.properties")
+val isProducingApk = gradle.startParameter.taskNames.any {
+    it.contains("assemble", ignoreCase = true) ||
+    it.contains("install", ignoreCase = true) ||
+    it.contains("bundle", ignoreCase = true)
+}
+val buildNumber: Int = run {
+    val props = Properties()
+    if (buildNumberFile.exists()) buildNumberFile.inputStream().use { props.load(it) }
+    val current = (props.getProperty("buildNumber") ?: "0").toIntOrNull() ?: 0
+    val next = if (isProducingApk) current + 1 else current
+    if (isProducingApk) {
+        props.setProperty("buildNumber", next.toString())
+        buildNumberFile.outputStream().use { props.store(it, "Auto-incremented per APK build. Do not edit by hand.") }
+    }
+    next
+}
+
 android {
     namespace = "com.photoflowmobile.app"
     compileSdk = 34
@@ -19,9 +49,10 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 3
-        versionName = "1.2"
+        versionName = "1.2 (build $buildNumber)"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
+        buildConfigField("int", "BUILD_NUMBER", "$buildNumber")
     }
 
     buildTypes {
@@ -62,10 +93,20 @@ android {
         val variant = this
         outputs.all {
             (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl)
-                .outputFileName = "PhotoFlow-${variant.buildType.name}-$buildTime.apk"
+                .outputFileName =
+                    "PhotoFlow-${variant.buildType.name}-b%03d-$buildTime.apk".format(buildNumber)
         }
     }
 }
+
+// Keep every debug APK outside build/, which `clean` wipes and which a failed build can leave
+// holding a stale artifact that looks current. `builds/` is gitignored; prune it by hand.
+tasks.register<Copy>("archiveDebugApk") {
+    from(layout.buildDirectory.dir("outputs/apk/debug")) { include("*.apk") }
+    into(rootProject.file("builds"))
+    doLast { logger.lifecycle("Archived build $buildNumber to builds/") }
+}
+tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy("archiveDebugApk") }
 
 dependencies {
 

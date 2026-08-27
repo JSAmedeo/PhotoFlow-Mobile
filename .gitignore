@@ -16,3 +16,7 @@ local.properties
 *.apk
 *.aab
 .claude/settings.local.json
+
+# Archived debug APKs (see app/build.gradle.kts archiveDebugApk)
+builds/
+app/build-number.properties

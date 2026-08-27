@@ -451,19 +451,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun startAutoRetryLoop() {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            // Ids already reported as exhausted, so the loop logs that once per image instead of
-            // every interval. Entries are dropped when the image leaves the failed set (retried
-            // by hand, or finally uploaded).
-            val loggedExhausted = mutableSetOf<Long>()
+            // Ids already reported as exhausted, mapped to the retryCount they were reported at,
+            // so the loop logs once per exhaustion rather than every interval.
+            //
+            // Keyed on the count, not just the id: a plain Set failed here. `forceRetry` sets the
+            // row PENDING, but a fast failure (bad credentials answer in ~60 ms) flips it back to
+            // FAILED well inside the poll interval, so the loop never saw it leave the failed set,
+            // never evicted the id, and every later exhaustion went unlogged. Observed on the
+            // Moto G 2026-08-27: two identical exhaustion cycles, only the first one logged.
+            val loggedExhausted = mutableMapOf<Long, Int>()
             while (true) {
                 val settings = dataStore.data.map { appSettingsFromPreferences(it) }.first()
                 if (settings.autoRetryEnabled) {
                     val failed = repository.getFailedImages().first()
-                    loggedExhausted.retainAll(failed.map { it.id }.toSet())
+                    loggedExhausted.keys.retainAll(failed.map { it.id }.toSet())
                     failed.forEach { image ->
                         val withinLimit = settings.autoRetryMaxCount == -1 ||
                                 image.retryCount < settings.autoRetryMaxCount
-                        if (!withinLimit && loggedExhausted.add(image.id)) {
+                        if (!withinLimit && loggedExhausted[image.id] != image.retryCount) {
+                            loggedExhausted[image.id] = image.retryCount
                             pipelineLog("[UPLOAD] retry limit reached: ${image.filename} id=${image.id} " +
                                     "after ${image.retryCount} attempt(s) — tap RETRY to try again")
                         }
