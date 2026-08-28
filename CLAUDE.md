@@ -562,7 +562,9 @@ Six fixes are in place:
 - orientationLock (OrientationLock enum — LANDSCAPE / LANDSCAPE_180 / PORTRAIT / PORTRAIT_180)
 - namingFields (List<NamingField>, pipe-delimited in DataStore)
 - namingSeparator, namingExtension
-- loggingEnabled (Boolean, default true)
+- loggingEnabled (Boolean, default true) — gates both logcat and the on-device log file
+- verboseLogging (Boolean, default false) — also writes DEBUG to the file. Off by default:
+  the PTP poll loop logs at DEBUG every 500 ms, which is unusable in a file over a session
 - autoRetryEnabled (Boolean, default true)
 - autoRetryIntervalSeconds (Int, default 4)
 - autoRetryMaxCount (Int, default 3; -1 = continuous) — bounded by default. Continuous
@@ -689,9 +691,68 @@ in ConfigScreen → GENERAL → STORAGE.)
 - Do not perform blocking file I/O on the tethered path without `withContext(Dispatchers.IO)` —
   `handleTetheredImage` runs on the single `PhotoFlow-USB` thread, so a full-size write there
   stalls image polling for its duration
+- Do not call `android.util.Log` directly in app code — import
+  `com.photoflowmobile.app.data.logging.PhotoFlowLog as Log` so the line also reaches the
+  on-device file. A direct call still works but is invisible after a reboot, which is exactly the
+  gap the file logger closes
+- Do not make `PhotoFlowLog`'s file write synchronous — it is called from the single
+  `PhotoFlow-USB` thread, and a blocking write there stalls image polling
+- Do not route DEBUG to the file unconditionally — the PTP poll loop logs every 500 ms, which is
+  unusable over a session. That is what the verbose toggle gates
+- Do not treat `app/build/outputs/apk/debug` as an archive — Gradle wipes stale files from its own
+  output directories on every build. Previous iterations live in `builds/`
 - Do not add database or DataStore files to the Android backup set — `backup_rules.xml` and
   `data_extraction_rules.xml` exclude `photoflow.db*` and `datastore/`. Restoring a backup
   across devices would inject a stale Room schema and stale credentials into a fresh install.
+
+## Logging
+
+`PhotoFlowLog` (`data/logging/PhotoFlowLog.kt`) is a drop-in replacement for `android.util.Log`
+that also writes to a rotating file at `filesDir/logs/photoflow-YYYY-MM-DD.log`.
+
+**Call sites are unchanged.** Each file does
+`import com.photoflowmobile.app.data.logging.PhotoFlowLog as Log`, so every existing
+`Log.i(TAG, msg)` keeps working. Signatures mirror `android.util.Log` exactly, including the Int
+return. The alias means the fragile PTP files carry a one-line change rather than 53 edits.
+
+**Why it exists.** Logcat is a RAM ring buffer — 256 KiB by default on these handsets, reset by a
+reboot, and `logcat -G` sizing resets with it. After the 2026-08-20 field test the device had
+rebooted, so nothing from the session survived. A field test runs with no laptop attached, so
+post-hoc capture is impossible by construction.
+
+**Two constraints shape the design — do not undo either:**
+
+1. **Never block the caller.** Logging happens on the single `PhotoFlow-USB` thread, where a
+   synchronous file write would stall image polling — the problem FR-6 fixed. Lines go to a
+   bounded `Channel` with `DROP_OLDEST`, drained by one writer coroutine on `Dispatchers.IO`.
+   Under flood the oldest lines are lost rather than the poll loop stalling.
+2. **Filter by level.** DEBUG reaches the file only when `verbose` is set. INFO and above always
+   do (when enabled). Logcat output is never gated, so `adb logcat` behaves as always.
+
+Rotation is by day, keeping 7 days or 20 MB, whichever binds first. `logCrashSync` writes an
+uncaught exception synchronously — bypassing the queue, because the process is about to die and
+the writer coroutine will never drain. Retrievable without ADB via
+ConfigScreen → GENERAL → LOGS → EXPORT LOGS.
+
+## Debug build identity
+
+Every debug build gets an iterating number from `app/build-number.properties` (gitignored):
+`versionName` reads `"1.2 (build N)"`, the APK is `PhotoFlow-debug-bNNN-<timestamp>.apk`, and
+`BuildConfig.BUILD_NUMBER` exposes it. Before this, every build reported `"1.2"` and an installed
+build could not be identified from `dumpsys package` — which bit when a stale APK from a failed
+build sat in the output directory looking current.
+
+The counter advances only when an APK is actually produced, not on IDE syncs or test runs.
+`assembleDebug` also copies the APK to `builds/`, outside the directory Gradle wipes:
+`app/build/outputs/apk/debug` holds **only the current build**, because Gradle removes stale files
+from its own output directories. That directory is never an archive.
+
+## Testing records
+
+`testing-logs/` holds machine-captured evidence from live sessions and the tooling to produce it —
+`capture_session.py` snapshots a device after a session and writes a report with integrity checks;
+`make_handoff.py` bundles reports for a stakeholder update. Reports are committed, raw snapshots
+are gitignored. `TESTING.md` holds procedures, pass criteria and evidence-based test priorities.
 
 ## Permissions
 

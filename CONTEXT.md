@@ -1,91 +1,112 @@
 ﻿# PhotoFlow Mobile — Project Context
 
 ## Current status
-All three screens implemented and functional. **Tethered DSLR works end-to-end on the Canon EOS
-Rebel T7** over USB PTP on the Samsung Galaxy test device: physical shutter stays active, shots
-are picked up within 1–3 s, downloaded at ~140 Mbps, and written into the active session with
-the same rename/save/upload pipeline as native capture.
 
-**FTP upload is wired and attempts real transfers** (Apache Commons Net, 5 s connect / 15 s data
-timeout, dynamic error messages). Workers always return `Result.failure()` — retry is managed by
-`MainViewModel.startAutoRetryLoop()` on a configurable interval (default 4 s). The FTP server
-must be configured in ConfigScreen → Connections for transfers to succeed.
+**Last updated 2026-08-27.** Two hardening passes (WI-1…WI-7, FR-1…FR-10) are merged to `master`,
+field-tested, and deployed to both handsets as `1.2 (build 2)`.
 
-**Cloud API upload is fully integrated** on branch `feature/cloud-api-upload` and aligned to the
-Phase 1 mobile/API contract. Endpoints:
-`POST /devices/register-with-setup-code`, `POST /sessions/upsert`, `POST /photos/upload`,
-`GET /sessions/by-code/{key}/manifest`, `GET /photos/{photo_uid}/file`.
-Device registration uses a `setup_code` field (not `venue_slug`); `venue_slug` is returned in
-the response and persisted. The staging API key is sent as `X-PhotoFlow-Api-Key` when configured.
-Upload fields include `idempotency_key` and `local_photo_id` (both = `image.id`) for safe retry
-deduplication, plus device metadata (`app_version`, `device_model`, `android_version`,
-`station_name`). Error categories per contract: AUTH_ERROR (401), CONFIG_ERROR (404 on register),
-NON_RETRYABLE_REQUEST_ERROR (404 session, 422), RETRYABLE_SERVER_ERROR (5xx),
-RETRYABLE_NETWORK_ERROR (timeout/connect). HTTP 409 on upload is treated as UPLOAD_ALREADY_EXISTS
-(marks uploaded using returned `photo_uid`). LAN HTTP is permitted via
-`<base-config cleartextTrafficPermitted="true">` in `network_security_config.xml`.
+**FTP is the live transfer path.** Cloud API upload is fully implemented but **shelved** — it is
+tied to a future project with no timeline. The code stays in place and dormant: `UploadWorker`
+only routes to it when the active `ConnectionProfile` is `CLOUD_API`.
 
-**Sequence number race condition fixed:** `captureMutex` in `MainViewModel` serializes the
-count-read → filename-assign → file-write/rename → DB-insert critical section for both capture
-paths (native and tethered), preventing two rapid shots from receiving the same sequence number.
-Native capture uses a temp file written outside the mutex so CameraX's slow hardware capture
-does not block the lock.
+**Upload retry is durable and bounded.** Executors return `Result.retry()` for transient failures
+(timeout, connection refused, I/O, HTTP 5xx) and `Result.failure()` for terminal ones (auth, 404,
+422, missing file). WorkManager owns the transient case with exponential backoff and a
+`NetworkType.CONNECTED` constraint. `MainViewModel.startAutoRetryLoop()` is a UI-facing supplement
+bounded by `autoRetryMaxCount` (default **3**) that only engages once WorkManager has given up.
+Both halves are field-verified — see "Test history".
 
-Room DB is at schema version 8. Native camera capture has full pipeline logging
-(`PhotoFlow/Pipeline` tag). WiFi chip recovers correctly after device sleep.
+**Tethered DSLR works end-to-end on the Canon EOS Rebel T7** over USB PTP: the physical shutter
+stays active, shots are picked up within 1–3 s, downloaded at ~140 Mbps, and written into the
+active session through the same rename/save/upload pipeline as native capture. Truncated
+transfers are now rejected rather than saved as valid images, and a dead poll loop tears down so
+the rescan can reconnect.
 
-**Splash screen** is implemented: `core-splashscreen` library provides an instant dark-background
-system splash before Compose renders; a `PhotoFlowSplash` composable then shows for 1.4 s with
-the app icon and "PhotoFlow Mobile" title before handing off to the NavGraph.
+**Session ownership: selection is activation.** Choosing a session in Session History makes it the
+active session, so an operator can deliberately add a shot to an earlier one. A persistent banner
+shows whenever the active session is not the newest. Both capture paths read the same session — an
+earlier override model let tethered shots land in whichever session was merely being reviewed.
 
-**Settings import/export** is implemented: ConfigViewModel serializes all DataStore settings and
-all Room ConnectionProfiles to a versioned JSON file written to Downloads. Import uses the system
-file picker and restores both atomically. Result shown in an AlertDialog.
+**Durable on-device logging.** `PhotoFlowLog` tees to logcat and a rotating file in `files/logs`,
+so a field session is self-documenting. Logcat is RAM-only and does not survive a reboot, which is
+how the 2026-08-20 field-test logs were lost. Retrievable without a laptop via
+ConfigScreen → LOGS → EXPORT LOGS.
 
-**Active git branch: `feature/cloud-api-upload`** — Cloud API integration is the active development path. FTP upload remains the production path on `master`.
+**Secrets live only in `CredentialStore`** (Keystore-backed). FTP passwords and the Cloud API key
+are never written to Room or DataStore, settings exports carry configuration only, and the
+encrypted store is excluded from Android backup.
+
+Room DB is at **schema version 9**. Splash screen and settings import/export are implemented.
+
+**Branches:** everything is on `master`. `phase2/field-readiness` and
+`hardening/reliability-security-pass` are merged and retained for history.
 
 ## Environment
 - Development machine: Windows 10
 - Primary coding environment: VS Code + Claude Code extension
 - Android Studio: used for emulator/AVD management and Logcat only
-- Project path: `C:\Users\John\AndroidStudioProjects\PhotoFlow-Mobile`
-- Primary test device: Samsung Galaxy (serial `adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp`) — physical device, wireless ADB
-- Secondary test device: Motorola G 2025 (serial `adb-ZY32L9TX7B`) — physical device, USB ADB; exposes non-Samsung USB host quirks (no `USB_DEVICE_ATTACHED` dispatch, Room first-emit latency ~2.6 s)
+- Project path: `C:\Projects\PhotoFlow Mobile`
+- Primary test device: Samsung Galaxy S23 — USB serial `RFCW101K9PA`, wireless
+  `adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp`. Primary tethering target; One UI USB quirks
+  drive the PTP transport design
+- Secondary test device: Motorola G 2025 — USB serial `ZY32L9TX7B`, wireless
+  `adb-ZY32L9TX7B-GrNvc4._adb-tls-connect._tcp`; exposes non-Samsung USB host quirks (no
+  `USB_DEVICE_ATTACHED` dispatch, Room first-emit latency ~2.6 s)
+- **Prefer the USB serial for anything that must not be interrupted.** Wireless ADB dropped
+  roughly every ten minutes during 2026-08 testing; USB held throughout
 - Emulator: Pixel 7 (AVD), Android 14 (tertiary, for UI work)
 
 ## Build & deploy
+
 ```bash
-# Build debug APK
+# Build. Each debug build gets an iterating number: versionName becomes "1.2 (build N)" and the
+# APK is PhotoFlow-debug-bNNN-<timestamp>.apk, so an installed build is identifiable from
+# `dumpsys package` alone. The counter lives in app/build-number.properties (gitignored) and
+# only advances when an APK is actually produced.
 ./gradlew assembleDebug
 
-# Install to Samsung (wireless ADB) — APK filename includes build timestamp
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp \
-  install -r app/build/outputs/apk/debug/PhotoFlow-debug-<YYYYMMDD-HHmm>.apk
+# Every build is also copied to builds/ , outside the directory Gradle wipes. app/build/outputs/
+# apk/debug holds ONLY the current build -- Gradle removes stale files from its own output dirs,
+# so that is never an archive. Prune builds/ by hand; each APK is ~43 MB.
 
-# Install to Motorola G 2025 (wireless ADB — full serial required)
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-ZY32L9TX7B-GrNvc4._adb-tls-connect._tcp \
-  install -r app/build/outputs/apk/debug/PhotoFlow-debug-<YYYYMMDD-HHmm>.apk
+ADB=/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe
 
-# Watch PhotoFlow logs only — Samsung
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp \
-  logcat -d | grep -E "PhotoFlow|EOS|PTP"
+# Install (USB serials; prefer these over wireless)
+$ADB -s RFCW101K9PA install -r app/build/outputs/apk/debug/PhotoFlow-debug-bNNN-<stamp>.apk   # Samsung
+$ADB -s ZY32L9TX7B  install -r app/build/outputs/apk/debug/PhotoFlow-debug-bNNN-<stamp>.apk   # Motorola
 
-# Watch PhotoFlow logs only — Motorola
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-ZY32L9TX7B \
-  logcat -d | grep -E "PhotoFlow|EOS|PTP"
+# Confirm which build a handset is running
+$ADB -s <serial> shell dumpsys package com.photoflowmobile.app | grep -E "versionName|lastUpdateTime"
 
-# Clear logcat buffer before a test — Samsung
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-RFCW101K9PA-PyKfsb._adb-tls-connect._tcp logcat -c
+# On-device log -- durable, survives reboot, the primary diagnostic record
+$ADB -s <serial> exec-out "run-as com.photoflowmobile.app cat files/logs/photoflow-$(date +%Y-%m-%d).log"
 
-# Clear logcat buffer before a test — Motorola
-/c/Users/John/AppData/Local/Android/Sdk/platform-tools/adb.exe \
-  -s adb-ZY32L9TX7B logcat -c
+# Logcat -- RAM only, 256 KiB by default, wiped by a reboot. Raise it before a test if a laptop
+# is attached; the sizing resets on reboot too.
+$ADB -s <serial> logcat -G 16M
+$ADB -s <serial> logcat -d -s "PhotoFlow/Pipeline:*" "PhotoFlow/Tether:*" "PhotoFlow/PTP:*"
 ```
+
+**Android Studio can block CLI builds.** While open it sometimes holds
+`app/build/.../R.jar`, failing `:app:processDebugResources` with
+`java.io.IOException: Couldn't delete ... R.jar`. That is an environment lock, not a code error.
+Close Studio, or build in a throwaway worktree (`git worktree add --detach <dir> HEAD`, copy
+`local.properties` across). Always check the build actually succeeded before installing -- a
+failed build can leave a stale APK in the output directory that looks current.
+
+## Capturing a test session
+
+After any session worth keeping, with the device on **USB**:
+
+```bash
+python testing-logs/tools/capture_session.py --serial <usb-serial> --label motog-tethered --date YYYY-MM-DD
+python testing-logs/tools/make_handoff.py    --date YYYY-MM-DD --notes "conditions"
+```
+
+The first snapshots the Room DB, settings, capture listing, device info and on-device logs, then
+writes a report with integrity checks. The second bundles every report for that date into
+`testing-logs/handoff/<date>/` for a stakeholder update. See `testing-logs/README.md` and the
+live-test checklist in `TESTING.md`.
 
 ## Source file map
 ```
@@ -167,7 +188,7 @@ app/src/main/java/com/photoflowmobile/app/
 │                                      shared uploadMutex; no WorkManager retry
 ```
 
-## Cloud API workflow (feature/cloud-api-upload — Phase 1 contract)
+## Cloud API workflow (SHELVED — Phase 1 contract, retained for when work resumes)
 
 Backend base URL: `http://<LAN-IP>:8000/api/v1` (user-configured in ConfigScreen → Connections as full base URL)
 
@@ -397,10 +418,16 @@ VM scoping) are documented there with reproduction conditions.
   side. The diff-poll fallback is the designed safety net for exactly this case.
 
 ## Known gaps / next steps
-- **Cloud API upload end-to-end validation** — COMPLETE. Phase 1 LAN test on Motorola G 2025
-  against backend at `192.168.20.40` confirmed: device registration, session upsert, photo upload
-  (HTTP 201), idempotency (retry returns HTTP 200 with same `photo_uid`). FTP remains the
-  production upload path on `master`; Cloud API integration lives on `feature/cloud-api-upload`.
+- **Cloud API upload** — implemented and LAN-validated (registration, session upsert, upload
+  HTTP 201, idempotent retry returning HTTP 200 with the same `photo_uid`), then **shelved**:
+  tied to a future project with no timeline. Dormant, not removed. Its API key still lives in
+  `CredentialStore`, but whether that key still authenticates is untested since nothing exercises
+  the path. Re-test when cloud work resumes.
+- **Terminal-failure logging fix unverified.** Build 2 corrects a bug where the "retry limit
+  reached" line logged once per image rather than once per exhaustion. The fix is deployed but
+  the second-exhaustion case has not been re-run.
+- **Two tethering recovery paths never executed** — `readDataAndResponse`'s truncation rejection
+  and `teardownAfterPollFailure`. Both run only on faults that have not yet occurred naturally.
 - **ML Kit barcode scanning** — Dependency in place; camera analysis use case not yet bound.
   Manual entry is the active path.
 - **EXIF strip** — ISO/shutter/aperture values in review pane are hardcoded placeholders.
@@ -410,6 +437,24 @@ VM scoping) are documented there with reproduction conditions.
 ## Test history
 Manual test sessions are tracked in `TESTING.md`. Key entries:
 
+Machine-captured evidence lives in `testing-logs/sessions/`; `TESTING.md` holds the procedures,
+pass criteria and evidence-based test priorities.
+
+- **2026-08-27 — Upload failure and recovery (Motorola).** The first upload failures ever recorded
+  on either device, captured by the newly installed on-device log. *Transient:* a photo shot at a
+  desk while the profile still pointed at the venue server retried at 80 s then 160 s — WorkManager
+  exponential backoff — with `retryCount` staying **0**, confirming a transient failure consumes
+  none of FR-3's 3-attempt budget. Switching profile and pressing RETRY uploaded it in 295 ms, which
+  also validated WI-2: the job was enqueued under one profile and executed under another.
+  *Terminal:* with wrong credentials, exactly 3 bounded retries at 4 s intervals, then
+  `retry limit reached` and silence. Manual RETRY granted a fresh 3, and fixing the password
+  uploaded in 570 ms. Exposed one defect, fixed in build 2 — see Known gaps.
+- **2026-08-20 — First real-workflow field test (both handsets, both modes).** 18 sessions,
+  26 photos, 100% uploaded, **0 misfiled, 0 duplicate or gapped sequence numbers**. The Samsung
+  showed an operator interleaving two sessions with each continuing its own numbering — the
+  workflow FR-1 created. Logcat was lost to an overnight reboot; the Room database carried the
+  whole record, which is why on-device logging was built immediately afterwards.
+  Reports: `testing-logs/sessions/2026-08-20-*.md`.
 - **2026-07-06 — Tethering reliability (Samsung Galaxy + Canon T7, commit `f55abf5`).**
   Three cable pull/replug cycles all succeeded on attempt 1 (~800 ms). Single `[APP] launched`
   per process (no zombie MtpCameraManager instances). Images IMG_3546–3552 → FTP `Worker result
